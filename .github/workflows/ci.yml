@@ -1,0 +1,52 @@
+name: ci
+
+on:
+  push:
+  pull_request:
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  test:
+    # The Windows and macOS code paths only ever run here: development happens
+    # on Linux, where they can be read but not executed.
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-latest]
+        python: ["3.12"]
+        include:
+          - os: ubuntu-latest
+            python: "3.10"
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python }}
+      - run: pip install -e .
+      - run: python -m unittest discover -s tests -v
+      # Read-only smoke test against a real OS. Nothing here deletes anything.
+      - run: cleam scan
+      - run: cleam apps --json > /dev/null
+
+  portable:
+    needs: test
+    strategy:
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install pyinstaller
+      - run: pyinstaller --onefile --name cleam --paths src packaging/entry.py
+      - run: ./dist/cleam --version && ./dist/cleam scan
+      - uses: actions/upload-artifact@v4
+        with:
+          name: cleam-${{ runner.os }}-${{ runner.arch }}
+          path: dist/*
