@@ -82,6 +82,26 @@ class Size(unittest.TestCase):
         self.assertTrue(folder.unreadable)
 
 
+class SizeLabel(unittest.TestCase):
+    def test_a_partial_read_is_marked_so_it_is_not_mistaken_for_the_total(self):
+        # C:\Windows always has folders no account can read; a plain number
+        # would sit below Explorer's and look like a bug in Cleam.
+        folder = overview.Folder("Windows", Path("/w"), files=1000, bytes=2048, denied=12, measured=True)
+        self.assertEqual(folder.size_label, "≥ 2.0 KiB")
+        self.assertIn("12 folders unreadable", folder.detail)
+
+    def test_a_fully_readable_folder_gets_a_plain_size(self):
+        folder = overview.Folder("usr", Path("/usr"), files=10, bytes=1024, measured=True)
+        self.assertEqual(folder.size_label, "1.0 KiB")
+
+    def test_nothing_readable_asks_for_admin(self):
+        folder = overview.Folder("docker", Path("/d"), denied=1, measured=True)
+        self.assertEqual(folder.size_label, "needs admin")
+
+    def test_unmeasured_says_so_rather_than_zero(self):
+        self.assertEqual(overview.Folder("x", Path("/x")).size_label, "not measured")
+
+
 class Folders(unittest.TestCase):
     def test_missing_folders_are_dropped(self):
         for folder in overview.folders():
@@ -102,8 +122,22 @@ class Biggest(unittest.TestCase):
         self.assertEqual([f.label for f in found], ["large", "medium"])
         self.assertEqual(found[0].bytes, 5000)
 
+    def test_a_useless_top_still_returns_the_biggest(self):
+        root = Path(tempfile.mkdtemp())
+        (root / "a").mkdir()
+        (root / "a" / "f").write_bytes(b"x" * 10)
+        for top in (0, -3):
+            self.assertEqual([f.label for f in overview.biggest(root, top=top)], ["a"], top)
+
 
 class Disks(unittest.TestCase):
+    def test_percent_matches_df_which_ignores_reserved_blocks_and_rounds_up(self):
+        # df prints ceil(used / (used + avail)). Measured on the dev box:
+        # 50.403% shows as 51%, and against total it would read 50%.
+        disk = overview.Disk("/", total=154_618_822_656, used=78_061_486_080, free=76_820_000_768)
+        self.assertEqual(disk.percent_used, 51)
+        self.assertEqual(overview.Disk("/", total=100, used=50, free=50).percent_used, 50)
+
     def test_percent_used_of_an_unreadable_mount_is_zero_not_a_crash(self):
         with mock.patch.object(overview.shutil, "disk_usage", side_effect=OSError):
             disk = overview._usage("/nope")

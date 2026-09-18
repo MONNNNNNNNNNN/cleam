@@ -52,6 +52,11 @@ shrinks it. `overview.py` is read-only by construction.
 
 ## GUI
 
+`docs/ux-test-plan.md` holds the personas, scenarios and test cases, with what
+was verified on screen versus traced in code. Re-run it after touching
+`gui.py`; several of these defects produced no exception and no console error,
+so only a screenshot caught them.
+
 `gui.py` decides nothing. It calls `junk.run()`, `apps.list_apps()` and
 `snapshot.run()` exactly as the CLI does, so the two front ends cannot disagree
 about what a clean will delete. Keep new behaviour in the core, not in a tab.
@@ -61,8 +66,23 @@ about what a clean will delete. Keep new behaviour in the core, not in a tab.
   prompt and apt's y/n reach the user, while the GUI captures output, passes
   `-y` up front, and uses `sudo -n` so an unanswerable password prompt fails
   instead of hanging the window.
-- **Long work goes through `page.run_thread()`.** A scan of `~/.cache` takes
-  seconds and freezes the window otherwise.
+- **Long work goes through `_worker()`, never `page.run_thread()` directly.**
+  `run_thread` uses a multi-worker `ThreadPoolExecutor` (`flet/app.py`), so two
+  clicks on Refresh really do run in parallel. Two jobs rebuilding one control
+  list corrupted it: reconciling rows by object identity
+  (`controls.index(placeholder)`) raised `ValueError: ... is not in list` and
+  left the row stuck on "measuring…" with nothing shown to the user. Rows are
+  now replaced by index, and `_worker` refuses a second job per panel.
+- **A wrapping `ft.Row` cannot hold an `expand=True` child.** Flutter renders
+  the entire panel as a featureless grey block — no exception, no console
+  error. `_buttons()` wraps fixed-width controls; `_field_row()` is for rows
+  containing a text field.
+- **Nothing destructive is pre-selected.** `junk.Target.opt_in` marks the
+  Recycle Bin / Trash, which the GUI never ticks for the user, and
+  "Clean selected" is disabled until a scan returns something.
+- **A checkbox's label is the target name** (`ListTile(title=checkbox)`), not a
+  separate `title`: a screen reader announcing "checkbox, unchecked" with the
+  name elsewhere tells a blind user nothing about what is about to be deleted.
 - **Flet 1.0 API, which differs from every 0.x tutorial:** `ft.run(main)` (no
   `ft.app`), `ft.Button` (no `ElevatedButton`), tabs are
   `ft.Tabs(length=N, content=Column([TabBar(tabs=[...]), TabBarView(controls=[...])]))`,

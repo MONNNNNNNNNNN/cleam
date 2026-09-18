@@ -31,12 +31,19 @@ def list_apps() -> list[App]:
     return sorted(apps, key=lambda a: a.name.lower())
 
 
-def uninstall(app: App, capture: bool = False) -> tuple[int, str]:
+def uninstall(app: App, capture: bool = False, timeout: float | None = None) -> tuple[int, str]:
     """(exit code, output). capture=True is for the GUI, which has no terminal.
 
     Without a terminal there is nobody to answer apt's y/n or sudo's password
     prompt, so pass the confirmation up front and let sudo fail fast instead.
+
+    A Windows uninstaller is never captured. It has its own window, writes
+    nothing useful to a pipe, and commonly relaunches itself (Au_.exe,
+    _isdel.exe); the child inherits the pipe handles, so reading to EOF can
+    block long after the uninstaller is done -- which would hang the GUI with
+    no way out.
     """
+    capture = capture and app.source != "registry"
     cmd = app.command
     if capture and app.source in ("apt", "flatpak"):
         cmd = [*cmd, "-y"]
@@ -44,9 +51,11 @@ def uninstall(app: App, capture: bool = False) -> tuple[int, str]:
         cmd = sudo(cmd, noninteractive=capture)  # flatpak asks polkit itself
     try:
         if capture:
-            p = subprocess.run(cmd, capture_output=True, text=True)
+            p = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout)
             return p.returncode, (p.stdout + p.stderr).strip()
         return subprocess.run(cmd).returncode, ""
+    except subprocess.TimeoutExpired:
+        return 1, f"{app.name}: no answer after {timeout:.0f}s. It may still be running."
     except OSError as e:
         return 1, str(e)
 

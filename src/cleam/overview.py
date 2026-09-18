@@ -7,6 +7,7 @@ callers list first, then measure one folder at a time.
 """
 from __future__ import annotations
 
+import math
 import os
 import platform
 import shutil
@@ -15,7 +16,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from .junk import REPARSE
-from .system import OS
+from .system import OS, human
 
 
 @dataclass
@@ -32,6 +33,30 @@ class Folder:
     def unreadable(self) -> bool:
         return self.files == 0 and self.denied > 0
 
+    @property
+    def size_label(self) -> str:
+        """What to show as the size. A partial read says so, with >=.
+
+        C:\\Users holds other people's profiles and C:\\Windows has folders no
+        account can read, so a plain number there would quietly be lower than
+        the one Explorer shows -- and comparing against Explorer is the whole
+        point of this screen.
+        """
+        if not self.measured:
+            return "not measured"
+        if self.unreadable:
+            return "needs admin"
+        return f"≥ {human(self.bytes)}" if self.denied else human(self.bytes)
+
+    @property
+    def detail(self) -> str:
+        if not self.measured:
+            return str(self.path)
+        parts = [str(self.path), f"{self.files} files"]
+        if self.denied:
+            parts.append(f"{self.denied} folders unreadable")
+        return " · ".join(parts)
+
 
 @dataclass
 class Disk:
@@ -42,7 +67,11 @@ class Disk:
 
     @property
     def percent_used(self) -> int:
-        return round(100 * self.used / self.total) if self.total else 0
+        # df's Use%, exactly: against used + free (the difference from total is
+        # the root-reserved blocks) and rounded up. Measured on this box:
+        # 50.403% is what df prints as 51%.
+        usable = self.used + self.free
+        return math.ceil(100 * self.used / usable) if usable else 0
 
 
 def os_name() -> str:
@@ -161,7 +190,9 @@ def folders() -> list[Folder]:
                 "Shrink it with: DISM /Online /Cleanup-Image /StartComponentCleanup",
             ),
             Folder("Program Files", drive / "Program Files"),
-            Folder("Users", drive / "Users", "Everyone's profiles, so it includes the folders above."),
+            # No C:\Users row: it is the sum of the AppData rows above plus
+            # other accounts, so it would walk the same files a second time
+            # and still report less than Explorer does.
             Folder("Downloads", home / "Downloads", "Yours to delete. Cleam never touches it."),
         ]
     elif OS == "macos":
@@ -237,6 +268,7 @@ def size(path: Path | str) -> tuple[int, int, int]:
 def biggest(root: Path | str, top: int = 10) -> list[Folder]:
     """The largest immediate children of root, biggest first. Answers "where did it go?"."""
     found: list[Folder] = []
+    top = max(1, top)  # --top 0 returned nothing; a negative one dropped the biggest
     try:
         entries = list(os.scandir(root))
     except OSError:

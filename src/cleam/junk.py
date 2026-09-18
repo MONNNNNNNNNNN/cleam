@@ -39,6 +39,9 @@ class Target:
     min_age_hours: float = 24
     admin: bool = False
     keep: tuple[str, ...] = ()  # top-level names under a root to leave alone
+    # opt_in targets are never selected for the user. The Recycle Bin is the
+    # only undo anybody has, so emptying it has to be a deliberate click.
+    opt_in: bool = False
 
 
 @dataclass
@@ -104,6 +107,7 @@ def targets() -> list[Target]:
                 mode="entries",
                 min_age_hours=0,
                 keep=("desktop.ini",),
+                opt_in=True,
             ),
         ]
     if OS == "macos":
@@ -111,7 +115,7 @@ def targets() -> list[Target]:
             Target("user-cache", "App caches", (home / "Library" / "Caches",), mode="entries", min_age_hours=168),
             Target("logs", "App logs", (home / "Library" / "Logs",), min_age_hours=168),
             Target("tmp", "Temp files", _paths(_env("TMPDIR"))),
-            Target("trash", "Trash", (home / ".Trash",), mode="entries", min_age_hours=0),
+            Target("trash", "Trash", (home / ".Trash",), mode="entries", min_age_hours=0, opt_in=True),
         ]
     cache = _env("XDG_CACHE_HOME") or home / ".cache"
     data = _env("XDG_DATA_HOME") or home / ".local" / "share"
@@ -127,7 +131,14 @@ def targets() -> list[Target]:
             keep=("ms-playwright", "huggingface", "torch"),
         ),
         Target("tmp", "Temp files", (Path("/tmp"),)),
-        Target("trash", "Trash", (data / "Trash" / "files", data / "Trash" / "info"), mode="entries", min_age_hours=0),
+        Target(
+            "trash",
+            "Trash",
+            (data / "Trash" / "files", data / "Trash" / "info"),
+            mode="entries",
+            min_age_hours=0,
+            opt_in=True,
+        ),
         Target(
             "apt-cache",
             "Downloaded .deb packages",

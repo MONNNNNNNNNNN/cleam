@@ -141,6 +141,12 @@ class BuiltinTargets(unittest.TestCase):
         ids = [t.id for t in junk.targets()]
         self.assertEqual(len(ids), len(set(ids)))
 
+    def test_emptying_the_bin_is_opt_in_and_nothing_else_is(self):
+        # The Recycle Bin / Trash is the only undo anyone has, so the GUI must
+        # never pre-tick it. Everything else is regenerable.
+        opt_in = {t.id for t in junk.targets() if t.opt_in}
+        self.assertEqual(opt_in, {"trash"} if junk.OS != "windows" else {"recycle-bin"})
+
 
 if __name__ == "__main__":
     unittest.main()

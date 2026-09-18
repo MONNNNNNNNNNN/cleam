@@ -23,6 +23,21 @@ Four tabs: **Overview** (OS and build, disk usage, where the space went),
 line call the same core, so they can never disagree about what a clean would
 delete.
 
+Interface rules, all of them there because breaking one hurt in testing
+(`docs/ux-test-plan.md` has the personas, scenarios and results):
+
+- Opening the app measures nothing. The OS line and the disks are instant;
+  walking `AppData` and `C:\Windows` happens when you press **Measure
+  folders**.
+- **Clean selected** stays disabled until a scan has found something.
+- The Recycle Bin / Trash is never pre-ticked. It is the only undo you have.
+- Each checkbox carries its target's name, so a screen reader announces what
+  it is about to delete.
+- Light and dark themes are both defined, and the controls wrap instead of
+  clipping at 700px or 200% scaling.
+
+![Dark mode at 700px](docs/screenshot-dark-narrow.png)
+
 ## Use
 
 ```sh

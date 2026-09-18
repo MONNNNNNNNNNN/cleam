@@ -7,15 +7,7 @@ import sys
 from dataclasses import asdict
 
 from . import __version__, apps, junk, overview, snapshot
-
-
-def human(n: int) -> str:
-    size = float(n)
-    for unit in ("B", "KiB", "MiB", "GiB"):
-        if size < 1024 or unit == "GiB":
-            return f"{size:.0f} {unit}" if unit == "B" else f"{size:.1f} {unit}"
-        size /= 1024
-    return ""
+from .system import human
 
 
 def cmd_overview(args) -> int:
@@ -36,11 +28,12 @@ def cmd_overview(args) -> int:
     print(f"{'Disk':<26}{'Size':>10}{'Used':>10}{'Free':>10}")
     for d in overview.disks():
         print(f"{d.mount:<26}{human(d.total):>10}{human(d.used):>10}{human(d.free):>10}  {d.percent_used}% used")
-    print(f"\n{'Folder':<22}{'Files':>9}{'Size':>11}")
+    print(f"\n{'Folder':<22}{'Files':>9}{'Size':>15}")
     for f in overview.folders():  # measured one at a time: each is a full walk
         overview.measure(f)
-        size = "needs admin" if f.unreadable else human(f.bytes)
-        print(f"{f.label:<22}{f.files:>9}{size:>11}")
+        print(f"{f.label:<22}{f.files:>9}{f.size_label:>15}")
+        if f.denied and f.files:
+            print(f"  {f.denied} folders could not be read, so the real total is larger")
         if f.note:
             print(f"  {f.note}")
     return 0
@@ -51,9 +44,9 @@ def cmd_biggest(args) -> int:
     if args.json:
         print(json.dumps([asdict(f) for f in rows], indent=2, default=str))
         return 0
-    print(f"{'Name':<40}{'Files':>9}{'Size':>11}")
+    print(f"{'Name':<40}{'Files':>9}{'Size':>15}")
     for f in rows:
-        print(f"{f.label[:38]:<40}{f.files:>9}{human(f.bytes):>11}")
+        print(f"{f.label[:38]:<40}{f.files:>9}{f.size_label:>15}")
     return 0
 
 

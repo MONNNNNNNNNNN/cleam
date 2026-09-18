@@ -74,6 +74,23 @@ class Uninstall(unittest.TestCase):
         self.assertEqual(cmd, ["sudo", "apt-get", "remove", "caddy"])
         self.assertEqual(text, "")
 
+    def test_a_windows_uninstaller_is_never_captured(self):
+        # Its pipes can outlive it (Au_.exe, _isdel.exe relaunch themselves),
+        # which would hang the GUI thread forever.
+        app = apps.App("{GUID}", "Some App", "1.0", "registry", "MsiExec.exe /X{GUID}")
+        with mock.patch.object(apps.subprocess, "run") as run:
+            run.return_value = mock.Mock(returncode=0)
+            apps.uninstall(app, capture=True, timeout=5)
+        self.assertNotIn("capture_output", run.call_args.kwargs)
+
+    def test_a_captured_uninstall_that_never_answers_reports_instead_of_hanging(self):
+        with mock.patch.object(apps, "sudo", side_effect=lambda cmd, noninteractive=False: cmd), mock.patch.object(
+            apps.subprocess, "run", side_effect=apps.subprocess.TimeoutExpired("apt-get", 900)
+        ):
+            code, text = apps.uninstall(self.APT, capture=True, timeout=900)
+        self.assertEqual(code, 1)
+        self.assertIn("no answer after 900s", text)
+
 
 if __name__ == "__main__":
     unittest.main()
