@@ -6,7 +6,7 @@ import json
 import sys
 from dataclasses import asdict
 
-from . import __version__, apps, junk, snapshot
+from . import __version__, apps, junk, overview, snapshot
 
 
 def human(n: int) -> str:
@@ -16,6 +16,45 @@ def human(n: int) -> str:
             return f"{size:.0f} {unit}" if unit == "B" else f"{size:.1f} {unit}"
         size /= 1024
     return ""
+
+
+def cmd_overview(args) -> int:
+    if args.json:
+        print(
+            json.dumps(
+                {
+                    "os": overview.os_name(),
+                    "disks": [asdict(d) for d in overview.disks()],
+                    "folders": [asdict(overview.measure(f)) for f in overview.folders()],
+                },
+                indent=2,
+                default=str,
+            )
+        )
+        return 0
+    print(f"{overview.os_name()}\n")
+    print(f"{'Disk':<26}{'Size':>10}{'Used':>10}{'Free':>10}")
+    for d in overview.disks():
+        print(f"{d.mount:<26}{human(d.total):>10}{human(d.used):>10}{human(d.free):>10}  {d.percent_used}% used")
+    print(f"\n{'Folder':<22}{'Files':>9}{'Size':>11}")
+    for f in overview.folders():  # measured one at a time: each is a full walk
+        overview.measure(f)
+        size = "needs admin" if f.unreadable else human(f.bytes)
+        print(f"{f.label:<22}{f.files:>9}{size:>11}")
+        if f.note:
+            print(f"  {f.note}")
+    return 0
+
+
+def cmd_biggest(args) -> int:
+    rows = overview.biggest(args.path, args.top)
+    if args.json:
+        print(json.dumps([asdict(f) for f in rows], indent=2, default=str))
+        return 0
+    print(f"{'Name':<40}{'Files':>9}{'Size':>11}")
+    for f in rows:
+        print(f"{f.label[:38]:<40}{f.files:>9}{human(f.bytes):>11}")
+    return 0
 
 
 def _selected(only: str | None) -> list[junk.Target]:
@@ -117,6 +156,16 @@ def parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(prog="cleam", description="Clean junk files, uninstall programs, take snapshots.")
     p.add_argument("--version", action="version", version=f"cleam {__version__}")
     sub = p.add_subparsers(dest="command", required=True)
+
+    o = sub.add_parser("overview", help="OS, disk usage and where the space went")
+    o.add_argument("--json", action="store_true")
+    o.set_defaults(fn=cmd_overview)
+
+    b = sub.add_parser("biggest", help="largest folders directly inside a path")
+    b.add_argument("path")
+    b.add_argument("--top", type=int, default=10)
+    b.add_argument("--json", action="store_true")
+    b.set_defaults(fn=cmd_biggest)
 
     s = sub.add_parser("scan", help="report junk per target (read-only)")
     s.add_argument("--only", metavar="IDS", help="comma-separated target ids")

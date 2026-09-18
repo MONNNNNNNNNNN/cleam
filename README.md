@@ -15,16 +15,20 @@ cleam-gui                  # the window
 
 Or, without installing: `PYTHONPATH=src python -m cleam --help`.
 
-![The Clean tab after a scan](docs/screenshot-clean.png)
+![The Overview tab](docs/screenshot-overview.png)
 
-Three tabs: **Clean** (scan, tick what to remove, optional snapshot first),
-**Programs** (filter, uninstall), **Snapshots** (create, list). The window and
-the command line call the same core, so they can never disagree about what a
-clean would delete.
+Four tabs: **Overview** (OS and build, disk usage, where the space went),
+**Clean** (scan, tick what to remove, optional snapshot first), **Programs**
+(filter, uninstall), **Snapshots** (create, list). The window and the command
+line call the same core, so they can never disagree about what a clean would
+delete.
 
 ## Use
 
 ```sh
+cleam overview                    # OS and build, disk usage, the big folders
+cleam biggest ~/.cache --top 5    # where the space actually went, under any path
+
 cleam scan                        # what would be cleaned, per target (read-only)
 cleam clean                       # same report; a dry run — deletes nothing
 cleam clean --yes                 # delete
@@ -43,6 +47,27 @@ any file could not be deleted (usually because it is in use).
 
 Targets needing admin/root (Windows temp and Update cache, apt's package cache)
 are skipped with "needs admin" unless Cleam runs elevated.
+
+## Overview: is this folder size normal?
+
+A size on its own says nothing, so each big folder comes with what to expect
+and what actually shrinks it:
+
+- **`C:\Windows` 25-40 GB is normal** on Windows 11, and most of it is not
+  yours to delete.
+- **`WinSxS` is a hardlink farm.** Its files are hardlinks into `C:\Windows`,
+  so Explorer counts them twice and the folder looks far bigger than the space
+  it really costs. Do not delete it by hand — run
+  `DISM /Online /Cleanup-Image /StartComponentCleanup`.
+- **`AppData\Local` 10-30 GB is ordinary** — app caches, browsers, Electron
+  apps. This is the part Cleam can actually clean.
+- On Linux, `/var/log` gets `journalctl --vacuum-size`, and `/var/lib/docker`
+  gets `docker system prune`.
+
+Sizes skip junctions, symlinks and OneDrive placeholders, never leave the
+filesystem they start on, and count a hardlinked file once on Linux and macOS.
+A folder that cannot be read (root-owned `/var/lib/docker`) says "needs admin"
+rather than reporting a false 0 B.
 
 ## What gets cleaned
 

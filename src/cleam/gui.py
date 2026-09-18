@@ -12,7 +12,7 @@ try:
 except ModuleNotFoundError:  # pragma: no cover - depends on how Cleam was installed
     raise SystemExit("The Cleam GUI needs flet: pip install 'cleam[gui]'")
 
-from . import __version__, apps as apps_module, junk, snapshot
+from . import __version__, apps as apps_module, junk, overview, snapshot
 from .cli import human
 from .system import is_admin
 
@@ -40,6 +40,75 @@ def _confirm(page: ft.Page, title: str, body: str, action: str, on_yes) -> None:
             ],
         )
     )
+
+
+def _overview_tab(page: ft.Page) -> tuple[ft.Control, object]:
+    rows = ft.Column(spacing=0, scroll=ft.ScrollMode.AUTO, expand=True)
+    busy = ft.ProgressBar(visible=False)
+
+    def disk_row(disk: overview.Disk) -> ft.Control:
+        return ft.ListTile(
+            leading=ft.Icon(ft.Icons.STORAGE),
+            title=ft.Text(disk.mount),
+            subtitle=ft.Column(
+                [
+                    ft.Text(
+                        f"{human(disk.used)} used of {human(disk.total)} · {human(disk.free)} free",
+                        size=12,
+                    ),
+                    ft.ProgressBar(value=disk.percent_used / 100, bar_height=6),
+                ],
+                spacing=4,
+                tight=True,
+            ),
+            trailing=ft.Text(f"{disk.percent_used}%"),
+        )
+
+    def folder_row(folder: overview.Folder) -> ft.Control:
+        if not folder.measured:
+            size = "measuring…"
+        elif folder.unreadable:
+            size = "needs admin"
+        else:
+            size = human(folder.bytes)
+        subtitle = [ft.Text(f"{folder.path} · {folder.files} files", size=12)]
+        if folder.note:
+            subtitle.append(ft.Text(folder.note, size=12, italic=True))
+        return ft.ListTile(
+            leading=ft.Icon(ft.Icons.FOLDER_OUTLINED),
+            title=ft.Text(folder.label),
+            subtitle=ft.Column(subtitle, spacing=2, tight=True),
+            trailing=ft.Text(size),
+        )
+
+    def load() -> None:
+        busy.visible = True
+        rows.controls = [ft.Text(overview.os_name(), weight=ft.FontWeight.BOLD)]
+        page.update()
+        rows.controls += [disk_row(d) for d in overview.disks()]
+        rows.controls.append(ft.Divider())
+        page.update()
+        # One folder at a time, each shown as it finishes: a walk of AppData or
+        # C:\Windows is hundreds of thousands of files and takes real seconds.
+        found = overview.folders()
+        placeholders = [folder_row(f) for f in found]
+        rows.controls += placeholders
+        page.update()
+        for folder, placeholder in zip(found, placeholders):
+            overview.measure(folder)
+            rows.controls[rows.controls.index(placeholder)] = folder_row(folder)
+            page.update()
+        busy.visible = False
+        page.update()
+
+    return ft.Column(
+        [
+            ft.Row([ft.Button("Refresh", icon=ft.Icons.REFRESH, on_click=lambda _: page.run_thread(load))]),
+            busy,
+            rows,
+        ],
+        expand=True,
+    ), load
 
 
 def _clean_tab(page: ft.Page) -> ft.Control:
@@ -221,32 +290,35 @@ def main(page: ft.Page) -> None:
     page.title = f"Cleam {__version__}"
     page.theme = ft.Theme(color_scheme_seed=ft.Colors.TEAL)
     page.padding = 16
+    overview_view, load_overview = _overview_tab(page)
     apps_view, load_apps = _apps_tab(page)
-    listed = []
+    loaded: set[int] = set()
 
     def on_tab(e) -> None:
-        # Reading the program list takes a second, so do it when the tab is
-        # first opened rather than on startup. A scan is heavier, so that stays
-        # a button the user presses.
-        if tabs.selected_index == 1 and not listed:
-            listed.append(True)
-            page.run_thread(load_apps)
+        # Both lists take a second or more to read, so each loads when its tab
+        # is first opened rather than on startup. A junk scan is heavier still,
+        # so that stays a button the user presses.
+        index = tabs.selected_index
+        if index in (0, 2) and index not in loaded:
+            loaded.add(index)
+            page.run_thread(load_overview if index == 0 else load_apps)
 
     tabs = ft.Tabs(
-        length=3,
+        length=4,
         expand=True,
         on_change=on_tab,
         content=ft.Column(
             [
                 ft.TabBar(
                     tabs=[
+                        ft.Tab(label="Overview", icon=ft.Icons.MONITOR_HEART),
                         ft.Tab(label="Clean", icon=ft.Icons.CLEANING_SERVICES),
                         ft.Tab(label="Programs", icon=ft.Icons.APPS),
                         ft.Tab(label="Snapshots", icon=ft.Icons.HISTORY),
                     ]
                 ),
                 ft.TabBarView(
-                    controls=[_clean_tab(page), apps_view, _snapshot_tab(page)],
+                    controls=[overview_view, _clean_tab(page), apps_view, _snapshot_tab(page)],
                     expand=True,
                 ),
             ],
@@ -254,6 +326,8 @@ def main(page: ft.Page) -> None:
         ),
     )
     page.add(tabs)
+    loaded.add(0)
+    page.run_thread(load_overview)  # the opening tab, so it fills itself in
 
 
 def run() -> None:

@@ -14,6 +14,7 @@ binary, and command-line scripts. The installer is not started.
 
 ```
 src/cleam/
+  overview.py   OS/build, disk usage, big-folder sizes with "is this normal" notes
   junk.py       targets per OS + the scan/delete walk (the dangerous part)
   apps.py       installed programs; uninstall = run the platform's own uninstaller
   snapshot.py   Windows restore points, Timeshift/Snapper, tmutil
@@ -24,6 +25,30 @@ packaging/entry.py  PyInstaller entry (__main__.py's relative import breaks it)
 ```
 
 Test: `PYTHONPATH=src python3 -m unittest discover -s tests`
+
+## Overview (read-only, deletes nothing)
+
+Mon's ask (2026-09-18): a folder size like "AppData 33.7 GB" means nothing
+without context, so every big folder carries what is normal and what actually
+shrinks it. `overview.py` is read-only by construction.
+
+- **`ProductName` lies.** Windows 11 still reports "Windows 10 Pro" in
+  `HKLM\SOFTWARE\Microsoft\Windows NT\CurrentVersion`. `CurrentBuild >= 22000`
+  is what makes it 11. `DisplayVersion` gives 24H2, `UBR` the patch number.
+- **WinSxS is a hardlink farm.** Its files are hardlinks into `C:\Windows`, so
+  any per-file sum counts them twice, Explorer included. Windows directory
+  entries carry no link count (`DirEntry.stat().st_nlink` is 0), so dedup by
+  `(st_dev, st_ino)` works on POSIX only, and the Windows row says so instead
+  of pretending. Never suggest deleting WinSxS by hand —
+  `DISM /Online /Cleanup-Image /StartComponentCleanup`.
+- **`size()` shares junk.py's rules:** skip reparse points, never cross a
+  filesystem, never follow a symlink. It returns unreadable-directory count as
+  a third value, so a root-owned folder shows "needs admin" rather than 0 B.
+- **Listing and measuring are separate.** `folders()` returns rows instantly;
+  `measure()` is the walk. The GUI paints the rows, then fills them one at a
+  time, because `C:\Windows` and `AppData` are hundreds of thousands of files.
+- `/proc/mounts` is mostly squashfs snaps, tmpfs and overlays;
+  `parse_mounts()` keeps real `/dev/*` devices only.
 
 ## GUI
 
