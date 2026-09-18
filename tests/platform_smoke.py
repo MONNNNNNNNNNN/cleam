@@ -158,7 +158,10 @@ def smoke_registry() -> None:
 def smoke_platform_facts() -> None:
     name = overview.os_name()
     if OS == "windows":
-        check("Windows version names 10 or 11 with a build", "Windows 1" in name and "build" in name, name)
+        # Not just "Windows 1": a CI runner reports Windows Server 2025, and
+        # the rename rule only rewrites the desktop editions that lie.
+        ok = name.startswith("Windows") and "build" in name and any(c.isdigit() for c in name)
+        check("Windows edition, release and build are named", ok, name)
     elif OS == "macos":
         check("macOS version is a number", name.startswith("macOS") and any(c.isdigit() for c in name), name)
     else:
