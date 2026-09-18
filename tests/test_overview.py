@@ -52,14 +52,17 @@ class Size(unittest.TestCase):
         self.assertEqual(overview.size(self.root), (2, 150, 0))
 
     @unittest.skipUnless(hasattr(os, "link"), "needs hardlinks")
-    def test_a_hardlinked_file_counts_once(self):
-        # WinSxS is a hardlink farm, which is why Explorer overstates it.
+    def test_a_hardlinked_file_counts_once_where_the_link_count_is_visible(self):
+        # WinSxS is a hardlink farm, which is why Explorer overstates it. A
+        # Windows directory entry carries no link count (st_nlink is 0 there),
+        # so dedup is POSIX-only and the Windows WinSxS row says so.
         original = self.write("a", 100)
         try:
             os.link(original, self.root / "same")
         except OSError:
             self.skipTest("hardlinks not permitted here")
-        self.assertEqual(overview.size(self.root), (1, 100, 0))
+        expected = (2, 200, 0) if os.name == "nt" else (1, 100, 0)
+        self.assertEqual(overview.size(self.root), expected)
 
     def test_symlinks_are_not_counted_or_followed(self):
         outside = self.write("../outside/big", 900)
