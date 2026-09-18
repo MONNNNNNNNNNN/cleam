@@ -143,6 +143,15 @@ Two limits on purpose:
   file descriptors, so a symlink planted in `/tmp` cannot redirect a root-run
   clean.
 
+## Tested on
+
+Linux, Windows and macOS each run `tests/platform_smoke.py` against the real
+platform — including, on Windows, a registry key exported, deleted, imported
+back and verified. The Windows installer is built, installed with
+`/VERYSILENT`, run, and uninstalled in CI. Android builds an APK; iOS builds
+an `.xcarchive` but cannot produce an `.ipa` without a signing certificate.
+Full results and caveats: [docs/platforms.md](docs/platforms.md).
+
 ## Develop
 
 ```sh

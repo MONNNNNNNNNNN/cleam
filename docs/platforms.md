@@ -1,5 +1,24 @@
 # What Cleam can do on each platform
 
+## Tested on (2026-09-18)
+
+`tests/platform_smoke.py` runs the installed command and the real platform —
+overview, scan, program list, dry-run clean, and a leftovers backup/restore
+round-trip in a sandboxed HOME. `.github/workflows/platform-tests.yml` runs it
+on each OS.
+
+| Platform | How it was tested | Result |
+|---|---|---|
+| Linux | Ubuntu 24.04 (dev box) and ubuntu-latest | 20/20 checks |
+| Windows | windows-latest, Windows Server 2025 24H2 (build 26100.33296) | 23/23 checks, including the registry key exported, deleted, imported back, value intact |
+| macOS | macos-latest | 20/20 checks |
+| Windows installer | Built with Inno Setup, installed with `/VERYSILENT`, the installed `cleam.exe` run, then uninstalled silently | Installs to `%LOCALAPPDATA%\Programs\Cleam`, runs, uninstalls leaving nothing |
+| Android | `flet build apk` on ubuntu-latest | Builds: a 60 MiB APK. Never run on a device, and the feature table below is why that matters |
+| iOS | `flet build ipa` on macos-latest | Builds a `.xcarchive`; **no `.ipa`** — Xcode exports one only for a signed app ($99/year Apple Developer Program) |
+
+The GUI itself is verified separately by driving it headlessly; see
+`docs/ux-test-plan.md`.
+
 The three features — clean junk, uninstall programs, take a restore point or
 snapshot — map very differently onto each OS. On the desktop they are all
 possible. On mobile the OS sandbox forbids most of them, and no framework

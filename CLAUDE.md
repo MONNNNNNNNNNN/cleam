@@ -101,8 +101,24 @@ about what a clean will delete. Keep new behaviour in the core, not in a tab.
   Flutter SDK and has never been run here.
 
 Development happens on a Linux ARM box. The Windows and macOS code paths
-cannot run there — only CI (`.github/workflows/ci.yml`) executes them. Say so
-when reporting a change to them as done.
+cannot run there — only CI executes them. Say so when reporting a change to
+them as done.
+
+`tests/platform_smoke.py` is the end-to-end check that the unit tests cannot
+be: it calls the installed command and the real platform (the real registry,
+the real `/Applications`), with a leftovers round-trip inside a sandboxed
+HOME. `.github/workflows/platform-tests.yml` runs it on all three OSes, builds
+and silently installs/uninstalls the Windows installer, and attempts the
+mobile builds. Run it after touching anything platform-specific — the unit
+tests mock the platform away, which is why they stay green while a Windows
+path is broken.
+
+Traps that cost a CI round each, all in the harness rather than in Cleam:
+`flet pack` clears `dist/` (give each build its own `--distpath`);
+`flet build apk/ipa` prompts about its Flutter SDK and a prompt in CI is an
+`EOFError` (pass `--yes`); and PowerShell returns a bare string when
+`Where-Object` matches once, so `$found[0]` is the first character — wrap it
+in `@()`.
 
 ## Safety invariants — do not weaken
 
