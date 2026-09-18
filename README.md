@@ -53,6 +53,10 @@ cleam clean --yes --only tmp,trash
 cleam apps --filter chrome        # installed programs
 cleam uninstall <id> [--snapshot] # runs the program's own uninstaller, asks first
 
+cleam leftovers "Some App"                  # what its uninstaller left behind
+cleam leftovers "Some App" --remove         # move those to a backup and remove them
+cleam restore ~/.local/share/cleam/backups/Some-App-20260918-153000
+
 cleam snapshot create --description "before driver update"
 cleam snapshot list
 ```
@@ -97,6 +101,32 @@ App caches are removed whole or not at all: a cache with any file modified in
 the last 7 days is left alone, because deleting part of a structured cache
 (uv, prisma) corrupts it. Playwright browsers and ML model caches are always
 kept.
+
+## Leftovers
+
+An uninstaller takes the program and leaves the settings folder, the
+publisher's registry key and the Start Menu shortcut. Cleam looks for those by
+name and offers them right after an uninstall — uncertain matches unticked.
+
+**Nothing is deleted.** Files and folders are *moved* into a timestamped
+backup, registry keys are exported with `reg export` first, and a manifest
+records where each item came from, so `cleam restore <backup>` puts it all
+back. A restore refuses to overwrite anything that reappeared meanwhile.
+
+Where it looks: `%APPDATA%`, `%LOCALAPPDATA%`, `%PROGRAMDATA%`, Program Files
+and the Start Menu; `HKCU\Software`, `HKLM\SOFTWARE` and the `WOW6432Node`
+view; `~/.config`, `~/.local/share`, `~/.cache`, `/etc`, `/opt`;
+`~/Library/{Application Support,Caches,Logs,Preferences,LaunchAgents}`; and
+apt packages that were removed but never purged.
+
+Two limits on purpose:
+
+- Only the immediate children of those roots are examined. A remnant lives at
+  `%APPDATA%\Publisher`, and a name-matching walk of a whole drive is how
+  these tools end up deleting the wrong thing.
+- A match that belongs to another installed program is dropped, so removing
+  Google Earth never offers `%LOCALAPPDATA%\Google` — Chrome shares it.
+  Generic words (`Microsoft`, `Software`, `Data`) match nothing on their own.
 
 ## Safety
 

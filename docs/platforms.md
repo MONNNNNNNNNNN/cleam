@@ -12,6 +12,7 @@ choice changes that.
 | Find large / duplicate files | Planned | Planned | Planned | Shared storage, with `MANAGE_EXTERNAL_STORAGE` | Photos only, via PhotoKit with user permission |
 | List installed programs | Registry `Uninstall` keys | apt (manual, non-base), snap, flatpak | `/Applications`, `~/Applications` | Yes (`QUERY_ALL_PACKAGES` is restricted on Play) | No |
 | Uninstall | Program's own `UninstallString` | `apt-get remove` / `snap remove` / `flatpak uninstall` | Move bundle to Trash via Finder | One app at a time, each confirmed by the user | No |
+| Leftovers after an uninstall | `%APPDATA%`, `%LOCALAPPDATA%`, `%PROGRAMDATA%`, Program Files, Start Menu, `HKCU`/`HKLM` Software + WOW6432Node | `~/.config`, `~/.local/share`, `~/.cache`, `/etc`, `/opt`, plus apt packages removed but not purged | `~/Library/{Application Support,Caches,Logs,Preferences,LaunchAgents}` | Own sandbox only | No |
 | Restore point / snapshot | `Checkpoint-Computer` (admin, System Protection on, max one per 24h) | Timeshift or Snapper | `tmutil localsnapshot` (APFS) | No | No |
 
 ## Mobile, honestly
@@ -34,8 +35,8 @@ choice changes that.
 |---|---|---|
 | Command line | `pip install .` then `cleam …`; scriptable with `--json` and exit codes | Done |
 | GUI | Flet (Flutter), `pip install '.[gui]'` then `cleam-gui` | Done — Clean, Programs, Snapshots tabs |
-| Portable binary | PyInstaller one-file build per OS, from CI (`.github/workflows/ci.yml`) | CLI only; the GUI needs `flet build` |
-| Installer `.exe` | Inno Setup (free) around the portable build, or `flet build windows` | Not started |
+| Portable binary | PyInstaller for the CLI, `flet pack` for the window, per OS (`.github/workflows/release.yml`) | Built in CI: CLI 8 MiB, window 61 MiB on Windows |
+| Installer `.exe` | Inno Setup around both binaries (`packaging/cleam.iss`) | Built in CI. `PrivilegesRequired=lowest`, so a standard account installs into its own profile; PATH is an unchecked opt-in |
 | Android / iOS | `flet build apk` / `flet build ipa` — needs the Flutter SDK, never run here | Not started, and the feature set shrinks to the table above |
 
 Unsigned Windows binaries trigger SmartScreen, and a one-file PyInstaller

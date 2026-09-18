@@ -17,6 +17,7 @@ src/cleam/
   overview.py   OS/build, disk usage, big-folder sizes with "is this normal" notes
   junk.py       targets per OS + the scan/delete walk (the dangerous part)
   apps.py       installed programs; uninstall = run the platform's own uninstaller
+  leftovers.py  remnants an uninstaller left; move-to-backup + restore
   snapshot.py   Windows restore points, Timeshift/Snapper, tmutil
   system.py     OS detection, is_admin(), sudo(), output()
   cli.py        argparse; entry point `cleam`
@@ -131,6 +132,36 @@ something:
   temp dir it cleans.
 - **Uninstall never deletes app files directly** — it runs the registered
   uninstaller, so the app's own cleanup happens.
+
+## Leftovers (the Revo-style part)
+
+Mon asked for Revo Uninstaller's depth (2026-09-18). `leftovers.py` covers the
+part that matters: remnants after an uninstall, and a backup that makes
+accepting them safe.
+
+- **Nothing is deleted, everything is moved.** Files go into
+  `backup_dir()/<label>-<stamp>/files`, registry keys are `reg export`ed then
+  deleted, and `manifest.json` holds the original path of each item. `restore()`
+  reverses it and refuses to overwrite a path that exists again. apt `purge` is
+  the one irreversible action, and the manifest says so.
+- **Immediate children of known roots only, never a deep walk.** A remnant is
+  at `%APPDATA%\Publisher`. Name-matching an entire drive is how this class of
+  tool deletes someone's project folder.
+- **`score()` is the whole safety model.** Exact token-set match is "high"
+  (ticked by default); containing the alias is "low" (never ticked). `NOISE`
+  drops generic words, so publisher "Microsoft" matches nothing by itself —
+  otherwise removing Teams would offer `%LOCALAPPDATA%\Microsoft`, which holds
+  Edge and Office.
+- **Candidates matching another installed program are dropped** (`other_apps`),
+  because `%LOCALAPPDATA%\Google` belongs to Chrome as much as to Earth.
+- **`last_path_part()`, not `os.path.basename`.** basename is
+  platform-specific, so a Windows install directory parsed on Linux yielded no
+  alias at all.
+- Still unbuilt from Revo: traced installation (a full registry/filesystem
+  snapshot diff), forced uninstall for broken uninstallers, and an autorun
+  manager. Hunter mode's crosshair overlay needs a transparent always-on-top
+  window with global mouse hooks — not reachable in Flet; the substitute is
+  picking from running processes.
 
 ## Platform facts worth not relearning
 
