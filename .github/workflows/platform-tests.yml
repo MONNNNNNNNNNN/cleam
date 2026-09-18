@@ -51,12 +51,16 @@ jobs:
           $setup = (Get-ChildItem dist-installer\*.exe)[0].FullName
           Start-Process -FilePath $setup -ArgumentList '/VERYSILENT','/SUPPRESSMSGBOXES','/NORESTART' -Wait
           $installed = "$env:ProgramFiles\Cleam\cleam.exe", "$env:LOCALAPPDATA\Programs\Cleam\cleam.exe"
-          $found = $installed | Where-Object { Test-Path $_ }
-          if (-not $found) { throw "installer put nothing in $installed" }
-          Write-Host "installed at $found"
-          & $found[0] --version
-          & $found[0] scan
-          "CLEAM_DIR=$(Split-Path $found[0])" >> $env:GITHUB_ENV
+          # @(): one match comes back as a string, and $found[0] would then be
+          # its first character -- "The term 'C' is not recognized".
+          $found = @($installed | Where-Object { Test-Path $_ })
+          if ($found.Count -eq 0) { throw "installer put nothing in $installed" }
+          $exe = $found[0]
+          Write-Host "installed at $exe"
+          & $exe --version
+          & $exe scan
+          if ($LASTEXITCODE -ne 0) { throw "installed cleam.exe scan exited $LASTEXITCODE" }
+          "CLEAM_DIR=$(Split-Path $exe)" >> $env:GITHUB_ENV
       - name: Uninstall silently
         shell: pwsh
         run: |
