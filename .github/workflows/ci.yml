@@ -32,6 +32,18 @@ jobs:
       - run: cleam scan
       - run: cleam apps --json > /dev/null
 
+  gui:
+    # Import-only: catches a rename in Flet's API, which is the way this file
+    # breaks. The window itself cannot be opened on a CI runner.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install -e '.[gui]'
+      - run: python -c "import cleam.gui; print('gui imports')"
+
   portable:
     needs: test
     strategy:

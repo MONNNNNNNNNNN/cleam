@@ -40,7 +40,8 @@ class Clean(unittest.TestCase):
         self.assertFalse((self.root / "old.tmp").exists())
 
     def test_failed_snapshot_aborts_clean(self):
-        with mock.patch.object(cli.snapshot, "create", return_value=1), contextlib.redirect_stderr(io.StringIO()):
+        failed = (1, "System Protection is off")
+        with mock.patch.object(cli.snapshot, "create", return_value=failed), contextlib.redirect_stderr(io.StringIO()):
             code, _ = self.run_cli("clean", "--yes", "--snapshot")
         self.assertEqual(code, 1)
         self.assertTrue((self.root / "old.tmp").exists())

@@ -33,9 +33,10 @@ choice changes that.
 | Form | How | Status |
 |---|---|---|
 | Command line | `pip install .` then `cleam …`; scriptable with `--json` and exit codes | Done |
-| Portable binary | PyInstaller one-file build per OS, from CI (`.github/workflows/ci.yml`) | CI job written, not yet run |
-| Installer `.exe` | Inno Setup (free) around the portable build, or the GUI toolkit's own bundler | Not started; decide with the GUI |
-| GUI | Not chosen | Open decision |
+| GUI | Flet (Flutter), `pip install '.[gui]'` then `cleam-gui` | Done — Clean, Programs, Snapshots tabs |
+| Portable binary | PyInstaller one-file build per OS, from CI (`.github/workflows/ci.yml`) | CLI only; the GUI needs `flet build` |
+| Installer `.exe` | Inno Setup (free) around the portable build, or `flet build windows` | Not started |
+| Android / iOS | `flet build apk` / `flet build ipa` — needs the Flutter SDK, never run here | Not started, and the feature set shrinks to the table above |
 
 Unsigned Windows binaries trigger SmartScreen, and a one-file PyInstaller
 build that deletes files is exactly what antivirus heuristics flag. Signing

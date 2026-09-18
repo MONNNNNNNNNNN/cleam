@@ -56,12 +56,19 @@ def cmd_clean(args) -> int:
         if not args.json:
             print("\nDry run: nothing deleted. Re-run with --yes to delete.")
         return 0
-    if args.snapshot and snapshot.create("Cleam: before clean") != 0:
+    if args.snapshot and not _snapshot("Cleam: before clean"):
         print("cleam: snapshot failed, nothing deleted", file=sys.stderr)
         return 1
     results = [junk.run(t, delete=True) for t in targets]
     _report(results, args.json)
     return 1 if any(r.errors for r in results) else 0
+
+
+def _snapshot(description: str) -> bool:
+    code, text = snapshot.create(description)
+    if text:
+        print(f"cleam: {text}", file=sys.stderr if code else sys.stdout)
+    return code == 0
 
 
 def cmd_apps(args) -> int:
@@ -88,14 +95,22 @@ def cmd_uninstall(args) -> int:
     print(f"Uninstall {app.name} {app.version} ({app.source})\n  {shown}")
     if not args.yes and input("Proceed? [y/N] ").strip().lower() != "y":
         return 1
-    if args.snapshot and snapshot.create(f"Cleam: before uninstalling {app.name}") != 0:
+    if args.snapshot and not _snapshot(f"Cleam: before uninstalling {app.name}"):
         print("cleam: snapshot failed, nothing uninstalled", file=sys.stderr)
         return 1
-    return apps.uninstall(app)
+    code, text = apps.uninstall(app)
+    if text:
+        print(text)
+    return code
 
 
 def cmd_snapshot(args) -> int:
-    return snapshot.list_snapshots() if args.action == "list" else snapshot.create(args.description)
+    code, text = (
+        snapshot.list_snapshots() if args.action == "list" else snapshot.create(args.description)
+    )
+    if text:
+        print(f"cleam: {text}", file=sys.stderr if code else sys.stdout)
+    return code
 
 
 def parser() -> argparse.ArgumentParser:

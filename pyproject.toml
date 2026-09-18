@@ -10,8 +10,14 @@ readme = "README.md"
 requires-python = ">=3.10"
 dependencies = []  # stdlib only: keeps the portable binary small and the supply chain empty
 
+[project.optional-dependencies]
+# The GUI only. The CLI and the cleaning core stay dependency-free, so the
+# portable CLI binary is small and `pip install cleam` pulls nothing.
+gui = ["flet>=1.0,<2"]
+
 [project.scripts]
 cleam = "cleam.cli:main"
+cleam-gui = "cleam.gui:run"
 
 [tool.setuptools.dynamic]
 version = { attr = "cleam.__version__" }

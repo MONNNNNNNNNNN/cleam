@@ -4,16 +4,23 @@ Clean junk files, uninstall programs, and take a restore point or snapshot
 first — on Windows, Linux and macOS. See [docs/platforms.md](docs/platforms.md)
 for what each OS allows, including why Android and iOS can only get a subset.
 
-Status: command-line core. No GUI yet.
-
 ## Install
 
 ```sh
-pip install .        # Python 3.10+, no dependencies
+pip install .              # CLI only — Python 3.10+, no dependencies
+pip install '.[gui]'       # adds the window (Flet)
 cleam --help
+cleam-gui                  # the window
 ```
 
 Or, without installing: `PYTHONPATH=src python -m cleam --help`.
+
+![The Clean tab after a scan](docs/screenshot-clean.png)
+
+Three tabs: **Clean** (scan, tick what to remove, optional snapshot first),
+**Programs** (filter, uninstall), **Snapshots** (create, list). The window and
+the command line call the same core, so they can never disagree about what a
+clean would delete.
 
 ## Use
 
@@ -74,3 +81,14 @@ PYTHONPATH=src python -m unittest discover -s tests
 
 CI runs the tests on Windows, macOS and Linux and builds a portable one-file
 binary for each.
+
+## Roadmap
+
+- Installer `.exe` around the portable build.
+- Duplicate and large-file finder (hashing, not guessing).
+- Cache commands that structured caches actually want: `uv cache prune`,
+  `npm cache clean`, `journalctl --vacuum-size`.
+- Optional AI advice for the long tail — "what is this folder, what breaks if
+  I delete it?" It would see metadata only (path, size, age, owning package),
+  never file contents, be off by default, and only ever suggest within the
+  folders Cleam already scans. Rules keep deciding what gets deleted.

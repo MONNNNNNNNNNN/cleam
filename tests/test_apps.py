@@ -1,4 +1,5 @@
 import unittest
+from unittest import mock
 
 from cleam import apps
 
@@ -51,6 +52,27 @@ class Parsers(unittest.TestCase):
     def test_flatpak_keeps_names_with_spaces(self):
         found = apps.parse_flatpak("com.visualstudio.code\tVisual Studio Code\t1.93\n")
         self.assertEqual((found[0].id, found[0].name, found[0].version), ("com.visualstudio.code", "Visual Studio Code", "1.93"))
+
+
+class Uninstall(unittest.TestCase):
+    APT = apps.App("caddy", "caddy", "2.11", "apt", ["apt-get", "remove", "caddy"])
+
+    def _run(self, capture):
+        sudo = lambda cmd, noninteractive=False: (["sudo", "-n", *cmd] if noninteractive else ["sudo", *cmd])
+        with mock.patch.object(apps, "sudo", side_effect=sudo), mock.patch.object(apps.subprocess, "run") as run:
+            run.return_value = mock.Mock(returncode=0, stdout="removed\n", stderr="")
+            result = apps.uninstall(self.APT, capture=capture)
+        return run.call_args[0][0], result
+
+    def test_gui_mode_answers_prompts_up_front_and_never_waits(self):
+        cmd, (code, text) = self._run(capture=True)
+        self.assertEqual(cmd, ["sudo", "-n", "apt-get", "remove", "caddy", "-y"])
+        self.assertEqual((code, text), (0, "removed"))
+
+    def test_cli_mode_keeps_the_prompts_and_the_terminal(self):
+        cmd, (_, text) = self._run(capture=False)
+        self.assertEqual(cmd, ["sudo", "apt-get", "remove", "caddy"])
+        self.assertEqual(text, "")
 
 
 if __name__ == "__main__":

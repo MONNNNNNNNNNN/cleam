@@ -31,11 +31,24 @@ def list_apps() -> list[App]:
     return sorted(apps, key=lambda a: a.name.lower())
 
 
-def uninstall(app: App) -> int:
+def uninstall(app: App, capture: bool = False) -> tuple[int, str]:
+    """(exit code, output). capture=True is for the GUI, which has no terminal.
+
+    Without a terminal there is nobody to answer apt's y/n or sudo's password
+    prompt, so pass the confirmation up front and let sudo fail fast instead.
+    """
     cmd = app.command
+    if capture and app.source in ("apt", "flatpak"):
+        cmd = [*cmd, "-y"]
     if app.source in ("apt", "snap"):
-        cmd = sudo(cmd)  # flatpak asks polkit itself
-    return subprocess.run(cmd).returncode
+        cmd = sudo(cmd, noninteractive=capture)  # flatpak asks polkit itself
+    try:
+        if capture:
+            p = subprocess.run(cmd, capture_output=True, text=True)
+            return p.returncode, (p.stdout + p.stderr).strip()
+        return subprocess.run(cmd).returncode, ""
+    except OSError as e:
+        return 1, str(e)
 
 
 # --- Windows -----------------------------------------------------------------
