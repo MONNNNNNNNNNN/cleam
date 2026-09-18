@@ -38,6 +38,32 @@ class Parsers(unittest.TestCase):
         found = apps.parse_dpkg(text, {"bash", "ca-certificates", "caddy"})
         self.assertEqual([a.id for a in found], ["caddy"])
 
+    def test_a_package_another_one_depends_on_is_not_an_app(self):
+        # Cloud images mark half the base system manual, so `manual` alone put
+        # acl and libssl next to Firefox.
+        text = "acl\t2.3\toptional\tno\ncaddy\t2.11\toptional\tno\n"
+        found = apps.parse_dpkg(text, {"acl", "caddy"}, needed={"acl"})
+        self.assertEqual([a.id for a in found], ["caddy"])
+
+    def test_reverse_dependencies_cover_alternatives_and_arch_suffixes(self):
+        status = (
+            "Package: systemd\n"
+            "Depends: libacl1 (>= 2.2.23), libssl3t64 | libssl1.1, dbus:amd64\n"
+            "Pre-Depends: libc6\n"
+            "Description: not a Depends: line\n"
+        )
+        self.assertEqual(
+            apps.needed_by_others(status),
+            {"libacl1", "libssl3t64", "libssl1.1", "dbus", "libc6"},
+        )
+
+    def test_only_a_lib_package_with_no_program_is_hidden(self):
+        so_only = "/usr/lib/aarch64-linux-gnu/libxkbcommon.so.0\n"
+        self.assertTrue(apps.is_library("libxkbcommon0", so_only))
+        # Requiring /usr/bin hid wazuh-manager and the docker CLI plugins.
+        self.assertFalse(apps.is_library("wazuh-manager", "/var/ossec/bin/wazuh-control\n"))
+        self.assertFalse(apps.is_library("libreoffice", "/usr/bin/libreoffice\n"))
+
     def test_snap_skips_bases_and_snapd(self):
         text = (
             "Name     Version  Rev   Tracking       Publisher   Notes\n"

@@ -26,6 +26,41 @@ class App:
     command: list[str] | str  # str = a raw Windows command line, passed to CreateProcess as-is
 
 
+BIN_DIRS = ("/usr/bin/", "/usr/sbin/", "/bin/", "/sbin/", "/usr/games/", "/opt/")
+
+
+def is_library(package: str, file_list: str) -> bool:
+    """True only for a lib* package that ships no program of its own.
+
+    libxkbcommon0 is a leaf nothing depends on, so the leaf rule alone keeps
+    it, and nobody means a shared object when they say "uninstall an app".
+    The name check has to be there too: requiring an executable in /usr/bin
+    hid wazuh-manager (it installs into /var/ossec) and the docker CLI plugins
+    (/usr/libexec). Showing one extra row beats hiding something real.
+    """
+    if not package.startswith("lib"):
+        return False
+    return not any(line.startswith(BIN_DIRS) for line in file_list.splitlines())
+
+
+def _dpkg_file_list(package: str) -> str:
+    # Multi-arch packages are recorded as <name>:<arch>.list.
+    from glob import glob
+
+    for path in (f"/var/lib/dpkg/info/{package}.list", *glob(f"/var/lib/dpkg/info/{package}:*.list")):
+        if text := _read(path):
+            return text
+    return ""
+
+
+def _read(path: str) -> str:
+    try:
+        with open(path, encoding="utf-8", errors="replace") as f:
+            return f.read()
+    except OSError:
+        return ""
+
+
 def list_apps() -> list[App]:
     apps = {"windows": _windows, "macos": _macos}.get(OS, _linux)()
     return sorted(apps, key=lambda a: a.name.lower())
@@ -118,15 +153,40 @@ def _windows() -> list[App]:
 # --- Linux -------------------------------------------------------------------
 
 
-def parse_dpkg(text: str, manual: set[str]) -> list[App]:
-    # Manually installed only: listing every library dpkg knows about buries the
-    # apps. Cloud images also mark the base system manual, so drop what dpkg
-    # calls essential, required or important -- bash is not an app to uninstall.
+def needed_by_others(status: str) -> set[str]:
+    """Every package named in another installed package's Depends or Pre-Depends.
+
+    Being manually installed is not enough to call something an app: cloud
+    images mark half the base system manual, so `acl` and `libssl` sat in the
+    list next to Firefox. A package nothing else depends on is a leaf -- the
+    thing somebody actually chose to install.
+    """
+    needed: set[str] = set()
+    for line in status.splitlines():
+        field, _, value = line.partition(":")
+        if field.strip() not in ("Depends", "Pre-Depends"):
+            continue
+        for clause in value.split(","):
+            for alternative in clause.split("|"):
+                name = alternative.strip().split()[0] if alternative.strip() else ""
+                if name:
+                    needed.add(name.split(":")[0])  # strip a :arch qualifier
+    return needed
+
+
+def parse_dpkg(text: str, manual: set[str], needed: set[str] = frozenset()) -> list[App]:
+    # Manually installed leaves only. Dropping what dpkg calls essential,
+    # required or important removes the base system (bash is not an app to
+    # uninstall); dropping anything another package depends on removes the
+    # libraries and build tools that came along for the ride.
     apps = []
     for line in text.splitlines():
         pkg, version, priority, essential = (line.split("\t") + ["", "", ""])[:4]
-        if pkg in manual and essential != "yes" and priority not in ("required", "important"):
-            apps.append(App(pkg, pkg, version, "apt", ["apt-get", "remove", pkg]))
+        if pkg not in manual or essential == "yes" or priority in ("required", "important"):
+            continue
+        if pkg in needed:
+            continue
+        apps.append(App(pkg, pkg, version, "apt", ["apt-get", "remove", pkg]))
     return apps
 
 
@@ -152,10 +212,12 @@ def parse_flatpak(text: str) -> list[App]:
 def _linux() -> list[App]:
     apps: list[App] = []
     if shutil.which("apt-mark"):
-        apps += parse_dpkg(
+        leaves = parse_dpkg(
             output(["dpkg-query", "-W", "-f=${Package}\t${Version}\t${Priority}\t${Essential}\n"]),
             set(output(["apt-mark", "showmanual"]).split()),
+            needed_by_others(_read("/var/lib/dpkg/status")),
         )
+        apps += [a for a in leaves if not is_library(a.id, _dpkg_file_list(a.id))]
     if shutil.which("snap"):
         apps += parse_snap(output(["snap", "list"]))
     if shutil.which("flatpak"):
