@@ -6,7 +6,7 @@ import json
 import sys
 from dataclasses import asdict
 
-from . import __version__, apps, junk, overview, snapshot
+from . import __version__, apps, junk, leftovers, overview, snapshot
 from .system import human
 
 
@@ -136,6 +136,51 @@ def cmd_uninstall(args) -> int:
     return code
 
 
+def cmd_leftovers(args) -> int:
+    installed = apps.list_apps()
+    match = next((a for a in installed if a.id == args.app or a.name.lower() == args.app.lower()), None)
+    name = match.name if match else args.app
+    found = leftovers.scan(
+        name,
+        publisher=args.publisher,
+        install_dir=args.install_dir,
+        other_apps=tuple(a.name for a in installed),
+    )
+    if args.json:
+        print(json.dumps([asdict(item) for item in found], indent=2))
+        return 0
+    if not found:
+        print(f"Nothing left behind by {name}.")
+        return 0
+    print(f"{'Confidence':<12}{'Kind':<16}{'Size':>11}  Target")
+    for item in found:
+        print(f"{item.confidence:<12}{item.kind:<16}{human(item.bytes):>11}  {item.target}")
+    chosen = found if args.include_low else [i for i in found if i.confidence == "high"]
+    if not args.remove:
+        print(f"\n{len(chosen)} would be removed. Add --remove to move them to a backup.")
+        return 0
+    if not chosen:
+        print("\nNothing at high confidence. Add --include-low to remove the uncertain ones too.")
+        return 0
+    if not args.yes and input(f"\nMove {len(chosen)} items to a backup and remove them? [y/N] ").strip().lower() != "y":
+        return 1
+    backup, errors = leftovers.remove(chosen, label=name)
+    print(f"Backed up to {backup}")
+    print(f"Undo with: cleam restore {backup}")
+    for error in errors:
+        print(f"cleam: {error}", file=sys.stderr)
+    return 1 if errors else 0
+
+
+def cmd_restore(args) -> int:
+    errors = leftovers.restore(args.backup)
+    for error in errors:
+        print(f"cleam: {error}", file=sys.stderr)
+    if not errors:
+        print(f"Restored everything in {args.backup}")
+    return 1 if errors else 0
+
+
 def cmd_snapshot(args) -> int:
     code, text = (
         snapshot.list_snapshots() if args.action == "list" else snapshot.create(args.description)
@@ -182,6 +227,20 @@ def parser() -> argparse.ArgumentParser:
     u.add_argument("--yes", action="store_true", help="skip the confirmation prompt")
     u.add_argument("--snapshot", action="store_true", help="take a restore point/snapshot first")
     u.set_defaults(fn=cmd_uninstall)
+
+    lo = sub.add_parser("leftovers", help="what an uninstaller left behind, and remove it reversibly")
+    lo.add_argument("app", help="program name or id, even one already uninstalled")
+    lo.add_argument("--publisher", default="", help="helps match the publisher's own folder")
+    lo.add_argument("--install-dir", default="", help="the folder it used to live in")
+    lo.add_argument("--remove", action="store_true", help="move the matches to a backup and remove them")
+    lo.add_argument("--include-low", action="store_true", help="also remove uncertain matches")
+    lo.add_argument("--yes", action="store_true", help="skip the confirmation prompt")
+    lo.add_argument("--json", action="store_true")
+    lo.set_defaults(fn=cmd_leftovers)
+
+    re_ = sub.add_parser("restore", help="put a leftovers backup back")
+    re_.add_argument("backup", help="a folder printed by `cleam leftovers --remove`")
+    re_.set_defaults(fn=cmd_restore)
 
     sn = sub.add_parser("snapshot", help="create or list restore points/snapshots")
     sn.add_argument("action", choices=("create", "list"))

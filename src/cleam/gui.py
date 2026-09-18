@@ -21,7 +21,7 @@ try:
 except ModuleNotFoundError:  # pragma: no cover - depends on how Cleam was installed
     raise SystemExit("The Cleam GUI needs flet: pip install 'cleam[gui]'")
 
-from . import __version__, apps as apps_module, junk, overview, snapshot
+from . import __version__, apps as apps_module, junk, leftovers as leftovers_module, overview, snapshot
 from .system import OS, human, is_admin, relaunch_as_admin
 
 MONO = "monospace"
@@ -318,6 +318,54 @@ def _apps_tab(page: ft.Page) -> tuple[ft.Control, object]:
         last = text.strip().splitlines()[-1] if text.strip() else ""
         _toast(page, last or (f"Uninstalled {app.name}" if code == 0 else f"Failed (exit {code})"))
         load()
+        # An uninstaller takes the program and leaves the settings folder, the
+        # publisher's registry key and the Start Menu shortcut behind.
+        offer_leftovers(app)
+
+    def offer_leftovers(app: apps_module.App) -> None:
+        install_dir = app.command if isinstance(app.command, str) else ""
+        found = leftovers_module.scan(
+            app.name,
+            install_dir=install_dir,
+            other_apps=tuple(a.name for a in installed if a.id != app.id),
+        )
+        if not found:
+            return
+        boxes = [
+            (item, ft.Checkbox(label=f"{item.target}  ({human(item.bytes)})", value=item.confidence == "high"))
+            for item in found
+        ]
+        body = ft.Column(
+            [ft.Text(f"{app.name} left these behind. Unticked ones are uncertain matches.", size=12)]
+            + [box for _, box in boxes],
+            tight=True,
+            scroll=ft.ScrollMode.AUTO,
+        )
+
+        def wipe(_) -> None:
+            page.pop_dialog()
+            chosen = [item for item, box in boxes if box.value]
+            if chosen:
+                _worker(page, busy, clear_leftovers, app, chosen)
+
+        page.show_dialog(
+            ft.AlertDialog(
+                modal=True,
+                icon=ft.Icon(ft.Icons.CLEANING_SERVICES),
+                title=ft.Text("Remove what was left behind?"),
+                content=body,
+                actions=[
+                    ft.TextButton("Keep them", on_click=lambda _: page.pop_dialog()),
+                    ft.FilledButton("Remove", on_click=wipe),
+                ],
+            )
+        )
+
+    def clear_leftovers(app: apps_module.App, chosen: list) -> None:
+        backup, errors = leftovers_module.remove(chosen, label=app.name)
+        # Moved, not deleted: the backup path is the undo, so say it out loud.
+        message = f"Moved {len(chosen)} items to {backup}. Undo: cleam restore \"{backup}\""
+        _toast(page, f"{message} ({len(errors)} could not be moved)" if errors else message)
 
     search = ft.TextField(label="Filter", dense=True, expand=True, on_change=show)
     control = ft.Column(

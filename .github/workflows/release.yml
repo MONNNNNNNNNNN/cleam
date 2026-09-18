@@ -32,6 +32,7 @@ jobs:
         with:
           name: cleam-cli-${{ runner.os }}-${{ runner.arch }}
           path: dist/cleam*
+          if-no-files-found: error
 
   gui:
     strategy:
@@ -53,6 +54,7 @@ jobs:
         with:
           name: cleam-gui-${{ runner.os }}-${{ runner.arch }}
           path: dist/cleam-gui*
+          if-no-files-found: error
 
   installer:
     needs: [cli, gui]
@@ -78,6 +80,7 @@ jobs:
         with:
           name: cleam-installer
           path: dist-installer/*.exe
+          if-no-files-found: error
 
   publish:
     needs: [cli, gui, installer]

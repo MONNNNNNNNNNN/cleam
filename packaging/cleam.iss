@@ -14,7 +14,8 @@ AppPublisher=Cleam
 DefaultDirName={autopf}\Cleam
 DefaultGroupName=Cleam
 UninstallDisplayIcon={app}\cleam-gui.exe
-OutputDir=dist-installer
+; Relative to this .iss file, not to the working directory.
+OutputDir=..\dist-installer
 OutputBaseFilename=cleam-setup-{#AppVersion}
 Compression=lzma2
 SolidCompression=yes
