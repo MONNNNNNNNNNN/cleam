@@ -25,7 +25,7 @@ class Matching(unittest.TestCase):
     def test_generic_words_alone_never_match(self):
         # Removing Teams must not offer %LOCALAPPDATA%\Microsoft, which holds
         # Edge, Office and Windows' own data.
-        self.assertEqual(leftovers.aliases_for("", "Microsoft"), [])
+        self.assertFalse(leftovers.aliases_for("", "Microsoft"))
         self.assertEqual(leftovers.score("Microsoft", leftovers.aliases_for("Microsoft Teams")), "")
         self.assertEqual(leftovers.score("Microsoft Teams", leftovers.aliases_for("Microsoft Teams")), "high")
 
@@ -38,6 +38,19 @@ class Matching(unittest.TestCase):
         aliases = leftovers.aliases_for("Some Editor 2024", install_dir=r"C:\Program Files\Sublime Text")
         self.assertEqual(leftovers.score("Sublime Text", aliases), "high")
 
+
+    def test_a_name_with_no_separators_still_matches(self):
+        # Remnants are routinely called GoogleChrome or CleamSmokeApp. Token
+        # matching sees one token there and lines nothing up, which a real run
+        # on Linux exposed.
+        self.assertEqual(leftovers.score("CleamSmokeApp", leftovers.aliases_for("Cleam Smoke App")), "high")
+        self.assertEqual(leftovers.score("GoogleChrome", leftovers.aliases_for("Google Chrome")), "high")
+        self.assertEqual(leftovers.score("SublimeText3", leftovers.aliases_for("Sublime Text")), "low")
+
+    def test_a_two_letter_name_is_too_short_to_match_anything(self):
+        # "Go" would claim every folder containing "go".
+        self.assertFalse(leftovers.aliases_for("Go"))
+        self.assertEqual(leftovers.score("Google Chrome", leftovers.aliases_for("Go")), "")
 
 class Scan(unittest.TestCase):
     def setUp(self):
@@ -134,7 +147,7 @@ class RegistryRoots(unittest.TestCase):
 
     @unittest.skipIf(os.name == "nt", "the empty path is the non-Windows one")
     def test_registry_scan_is_empty_off_windows(self):
-        self.assertEqual(leftovers._registry_leftovers([["myapp"]], set()), [])
+        self.assertEqual(leftovers._registry_leftovers(leftovers.aliases_for("myapp"), set()), [])
 
 
 if __name__ == "__main__":

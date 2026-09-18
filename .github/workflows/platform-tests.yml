@@ -1,0 +1,107 @@
+name: platform-tests
+
+# The unit tests mock the platform away, which is why they pass on Linux while
+# a Windows path is broken. These jobs run the real thing: the real registry,
+# the real installer, the real /Applications folder.
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: "0 3 * * 1" # Monday, so a platform change surfaces without a push
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  smoke:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install -e .
+      - run: python -m unittest discover -s tests -v
+      - name: End-to-end on a real ${{ matrix.os }}
+        run: python tests/platform_smoke.py
+
+  windows-installer:
+    # Builds the installer and actually installs it, silently, then removes it.
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install -e '.[gui]' flet-cli pyinstaller
+      - run: pyinstaller --onefile --name cleam --paths src packaging/entry.py
+      - run: flet pack packaging/entry_gui.py --name cleam-gui --product-name Cleam --yes
+      - run: choco install innosetup -y --no-progress
+      - run: '"/c/Program Files (x86)/Inno Setup 6/ISCC.exe" //DAppVersion=0.0.0-test packaging/cleam.iss'
+      - name: Install silently
+        shell: pwsh
+        run: |
+          $setup = (Get-ChildItem dist-installer\*.exe)[0].FullName
+          Start-Process -FilePath $setup -ArgumentList '/VERYSILENT','/SUPPRESSMSGBOXES','/NORESTART' -Wait
+          $installed = "$env:ProgramFiles\Cleam\cleam.exe", "$env:LOCALAPPDATA\Programs\Cleam\cleam.exe"
+          $found = $installed | Where-Object { Test-Path $_ }
+          if (-not $found) { throw "installer put nothing in $installed" }
+          Write-Host "installed at $found"
+          & $found[0] --version
+          & $found[0] scan
+          "CLEAM_DIR=$(Split-Path $found[0])" >> $env:GITHUB_ENV
+      - name: Uninstall silently
+        shell: pwsh
+        run: |
+          $uninstaller = Join-Path $env:CLEAM_DIR 'unins000.exe'
+          if (-not (Test-Path $uninstaller)) { throw "no uninstaller at $uninstaller" }
+          Start-Process -FilePath $uninstaller -ArgumentList '/VERYSILENT','/SUPPRESSMSGBOXES','/NORESTART' -Wait
+          Start-Sleep -Seconds 5
+          if (Test-Path (Join-Path $env:CLEAM_DIR 'cleam.exe')) { throw "uninstall left cleam.exe behind" }
+          Write-Host "uninstalled cleanly"
+
+  android:
+    # An experiment, allowed to fail: see docs/platforms.md for why a phone
+    # cannot do most of what Cleam does.
+    runs-on: ubuntu-latest
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+      - uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+      - run: pip install -e '.[gui]' flet-cli
+      - run: flet build apk --verbose
+      - run: ls -la build/apk || true
+      - uses: actions/upload-artifact@v4
+        with:
+          name: cleam-android-apk
+          path: build/apk/*.apk
+          if-no-files-found: warn
+
+  ios:
+    runs-on: macos-latest
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+      - run: pip install -e '.[gui]' flet-cli
+      # Unsigned: publishing needs the $99/year Apple Developer Program.
+      - run: flet build ipa --verbose
+      - run: ls -la build/ipa || true

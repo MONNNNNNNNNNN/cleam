@@ -21,3 +21,16 @@ cleam-gui = "cleam.gui:run"
 
 [tool.setuptools.dynamic]
 version = { attr = "cleam.__version__" }
+
+[tool.flet]
+# Used by `flet build apk` / `flet build ipa`. The mobile builds are an
+# experiment: an app on Android or iOS cannot clean another app's files, so
+# see docs/platforms.md before promising anything there.
+org = "dev.cleam"
+product = "Cleam"
+company = "Cleam"
+copyright = "Cleam"
+
+[tool.flet.app]
+path = "src"
+module = "cleam_mobile"

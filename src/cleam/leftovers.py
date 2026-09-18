@@ -54,6 +54,11 @@ def tokens(text: str) -> list[str]:
     return [t for t in normalize(text).split() if len(t) > 2 and t not in NOISE]
 
 
+def squash(text: str) -> str:
+    """Letters and digits only: "Visual Studio Code" -> "visualstudiocode"."""
+    return re.sub(r"[^a-z0-9]", "", text.lower())
+
+
 def last_path_part(path: str) -> str:
     """The final component of a path from either OS.
 
@@ -64,23 +69,47 @@ def last_path_part(path: str) -> str:
     return re.split(r"[\\/]+", path.strip("\\/ "))[-1] if path.strip("\\/ ") else ""
 
 
-def aliases_for(name: str, publisher: str = "", install_dir: str = "") -> list[list[str]]:
-    """Token lists worth matching a folder or key name against."""
+@dataclass(frozen=True)
+class Aliases:
+    """The forms of a program's name worth matching a folder or key against."""
+
+    tokens: tuple[tuple[str, ...], ...] = ()
+    # Separator-free names. Remnants are routinely called GoogleChrome or
+    # SublimeText, where token matching finds one token and nothing lines up.
+    squashed: frozenset[str] = frozenset()
+
+    def __bool__(self) -> bool:
+        return bool(self.tokens or self.squashed)
+
+
+def aliases_for(name: str, publisher: str = "", install_dir: str = "") -> Aliases:
     basename = last_path_part(install_dir)
-    found = [tokens(text) for text in (name, publisher, basename) if text]
-    return [alias for alias in found if alias]
+    token_lists = tuple(tuple(tokens(text)) for text in (name, publisher, basename) if tokens(text))
+    # The publisher is deliberately absent here: "Microsoft" as a whole-name
+    # match would claim %LOCALAPPDATA%\Microsoft, which holds Edge and Office.
+    whole = {
+        squash(text)
+        for text in (name, basename)
+        if len(squash(text)) > 3 and normalize(text) not in NOISE
+    }
+    return Aliases(token_lists, frozenset(whole))
 
 
-def score(candidate: str, aliases: list[list[str]]) -> str:
+def score(candidate: str, aliases: Aliases) -> str:
     """"high" for the same name, "low" for a name that contains one, else ""."""
-    candidate_tokens = set(tokens(candidate))
-    if not candidate_tokens:
+    if not aliases:
         return ""
-    for alias in aliases:
-        if candidate_tokens == set(alias):
+    flat = squash(candidate)
+    if flat in aliases.squashed:
+        return "high"
+    candidate_tokens = set(tokens(candidate))
+    for alias in aliases.tokens:
+        if candidate_tokens and candidate_tokens == set(alias):
             return "high"
-    for alias in aliases:
-        if set(alias) <= candidate_tokens or (len(alias) == 1 and alias[0] in candidate_tokens):
+    if any(whole in flat for whole in aliases.squashed):
+        return "low"
+    for alias in aliases.tokens:
+        if candidate_tokens and (set(alias) <= candidate_tokens or (len(alias) == 1 and alias[0] in candidate_tokens)):
             return "low"
     return ""
 
@@ -121,7 +150,7 @@ def registry_roots() -> list[tuple[str, str]]:
     ]
 
 
-def _registry_leftovers(aliases: list[list[str]], blocked: set[str]) -> list[Leftover]:
+def _registry_leftovers(aliases: Aliases, blocked: set[str]) -> list[Leftover]:
     if OS != "windows":
         return []
     import winreg
@@ -158,7 +187,7 @@ def _package_config_leftovers(name: str) -> list[Leftover]:
         if len(parts) < 2 or parts[0] != "rc":
             continue
         package = parts[1].split(":")[0]
-        if score(package, [tokens(name)]) or normalize(package) == normalize(name):
+        if score(package, aliases_for(name)) or normalize(package) == normalize(name):
             found.append(
                 Leftover(
                     "package-config",
