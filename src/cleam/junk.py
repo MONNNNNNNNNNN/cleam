@@ -21,7 +21,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from . import wincleanup
-from .system import OS, is_admin, output
+from .system import NO_WINDOW, OS, is_admin, output
 
 HOUR = 3600
 DAY = 24
@@ -64,6 +64,10 @@ class Target:
     # far bigger than what the command removes (the whole driver store versus
     # its superseded packages). Only the scan uses it; a clean is measured.
     estimate: str = ""
+    # mode="command": the name of an entry in RUNNERS, run in place of
+    # `command` (which then only has to exist on PATH). It returns how many
+    # items Windows refused, which are reported as errors.
+    runner: str = ""
 
 
 @dataclass
@@ -338,9 +342,10 @@ def targets() -> list[Target]:
                 admin=True,
                 # Opt-in: a removed old version is a driver you can no longer roll back to.
                 opt_in=True,
-                command=wincleanup.command(("Device Driver Packages",)),
+                command=("pnputil",),
                 estimate="old_driver_packages",
-                about="Older versions of drivers kept after updates. Removed by Windows' own Disk Cleanup;"
+                runner="old_driver_packages",
+                about="Older versions of drivers kept after updates. Removed by Windows' own pnputil;"
                 " drivers in use stay. Afterwards a driver cannot be rolled back.",
             ),
             Target(
@@ -778,6 +783,11 @@ def _command(roots: list[Path], t: Target, delete: bool, res: Result) -> None:
         res.files, res.bytes = ESTIMATES[t.estimate]() if t.estimate else _measure(roots)
         return
     before = _measure(roots)
+    if t.runner:
+        res.errors += RUNNERS[t.runner]()
+        files, size = _measure(roots)
+        res.files, res.bytes = max(0, before[0] - files), max(0, before[1] - size)
+        return
     try:
         done = subprocess.run(
             [exe, *t.command[1:]],
@@ -789,7 +799,7 @@ def _command(roots: list[Path], t: Target, delete: bool, res: Result) -> None:
             capture_output=True,
             stdin=subprocess.DEVNULL,  # a cleaner that asks y/n reads EOF instead of hanging
             timeout=COMMAND_TIMEOUT,
-            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),  # no console flashing up over the GUI
+            creationflags=NO_WINDOW,
         )
         failed = done.returncode != 0
     except (OSError, subprocess.SubprocessError):
@@ -801,3 +811,4 @@ def _command(roots: list[Path], t: Target, delete: bool, res: Result) -> None:
 
 
 ESTIMATES = {"old_driver_packages": wincleanup.old_driver_packages}
+RUNNERS = {"old_driver_packages": wincleanup.delete_old_driver_packages}

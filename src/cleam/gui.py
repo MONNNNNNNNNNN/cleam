@@ -109,7 +109,7 @@ def _field_row(*controls: ft.Control) -> ft.Row:
 def _card(*controls: ft.Control, spacing: float = 12, bgcolor=ft.Colors.SURFACE_CONTAINER_LOW) -> ft.Container:
     return ft.Container(
         ft.Column(list(controls), spacing=spacing, tight=True),
-        padding=20,
+        padding=16,
         border_radius=16,
         bgcolor=bgcolor,
         border=ft.Border.all(1, ft.Colors.OUTLINE_VARIANT),
@@ -118,8 +118,8 @@ def _card(*controls: ft.Control, spacing: float = 12, bgcolor=ft.Colors.SURFACE_
 
 def _header(title: str, subtitle: ft.Text | str) -> ft.Control:
     if isinstance(subtitle, str):
-        subtitle = ft.Text(subtitle, color=MUTED)
-    return ft.Column([ft.Text(title, size=28, weight=ft.FontWeight.W_700), subtitle], spacing=2, tight=True)
+        subtitle = _muted(subtitle)
+    return ft.Column([ft.Text(title, size=24, weight=ft.FontWeight.W_700), subtitle], spacing=0, tight=True)
 
 
 def _muted(value: str, **kwargs) -> ft.Text:
@@ -132,7 +132,7 @@ def _admin_banner(page: ft.Page) -> ft.Control | None:
     text = ft.Text(
         "Some system items (Windows temp, Update downloads, error reports, logs) and restore points"
         " need administrator rights, so they are skipped.",
-        size=13,
+        size=12,
         expand=True,
     )
     if OS == "windows":
@@ -146,9 +146,10 @@ def _admin_banner(page: ft.Page) -> ft.Control | None:
         action: ft.Control = ft.Button("Restart as administrator", icon=ft.Icons.SHIELD, on_click=elevate)
     else:
         action = ft.Text("Start Cleam with sudo to include them.", size=13, italic=True)
+    # One row, not a block: it sits above content that has to fit one screen.
     return ft.Container(
-        ft.Column([_field_row(ft.Icon(ft.Icons.ADMIN_PANEL_SETTINGS), text), action], spacing=8, tight=True),
-        padding=14,
+        _field_row(ft.Icon(ft.Icons.ADMIN_PANEL_SETTINGS), text, action),
+        padding=10,
         border_radius=12,
         bgcolor=ft.Colors.TERTIARY_CONTAINER,
     )
@@ -158,75 +159,58 @@ def _admin_banner(page: ft.Page) -> ft.Control | None:
 
 
 def _overview_page(page: ft.Page, on_scan) -> tuple[ft.Control, object]:
-    os_line = ft.Text("", color=MUTED)
-    disks = ft.Row(wrap=True, spacing=12, run_spacing=12)  # fixed-width cards only: it wraps
+    os_line = _muted("")
+    disks = ft.Row(wrap=True, spacing=10, run_spacing=10)  # fixed-width tiles only: it wraps
     folder_rows = ft.Column(spacing=0)
     busy = ft.ProgressBar(visible=False, border_radius=2)
     found: list[overview.Folder] = []
 
-    def disk_card(disk: overview.Disk) -> ft.Control:
+    def disk_tile(disk: overview.Disk) -> ft.Control:
         pct = disk.percent_used
         color = ft.Colors.ERROR if pct >= 90 else ft.Colors.TERTIARY if pct >= 75 else ft.Colors.PRIMARY
         ring = ft.Stack(
             [
-                ft.ProgressRing(
-                    value=pct / 100,
-                    width=64,
-                    height=64,
-                    stroke_width=7,
-                    stroke_cap=ft.StrokeCap.ROUND,
-                    color=color,
-                    bgcolor=ft.Colors.SURFACE_CONTAINER_HIGHEST,
-                    semantics_label=f"{disk.mount} {pct}% used",
-                ),
-                ft.Container(
-                    ft.Text(f"{pct}%", weight=ft.FontWeight.W_700), alignment=ft.Alignment.CENTER, width=64, height=64
-                ),
+                ft.ProgressRing(value=pct / 100, width=44, height=44, stroke_width=5,
+                                stroke_cap=ft.StrokeCap.ROUND, color=color,
+                                bgcolor=ft.Colors.SURFACE_CONTAINER_HIGHEST,
+                                semantics_label=f"{disk.mount} {pct}% used"),
+                ft.Container(ft.Text(f"{pct}%", size=11, weight=ft.FontWeight.W_700),
+                             alignment=ft.Alignment.CENTER, width=44, height=44),
             ],
-            width=64,
-            height=64,
-        )
-        text = ft.Column(
-            [
-                ft.Text(disk.mount, size=18, weight=ft.FontWeight.W_600),
-                ft.Text(f"{human(disk.free)} free", size=14),
-                _muted(f"{human(disk.used)} of {human(disk.total)} used"),
-            ],
-            spacing=2,
-            tight=True,
+            width=44,
+            height=44,
         )
         return ft.Container(
-            ft.Row([ring, text], spacing=16),
-            width=270,
-            padding=16,
-            border_radius=16,
+            # Short lines: "24.0 GiB free of 100.3 GiB" was cut off at this width.
+            ft.Row([ring, ft.Column([ft.Text(disk.mount, weight=ft.FontWeight.W_600),
+                                     ft.Text(f"{human(disk.free)} free", size=12),
+                                     _muted(f"of {human(disk.total)}")],
+                                    spacing=0, tight=True)], spacing=10),
+            width=190,
+            padding=10,
+            border_radius=12,
             bgcolor=ft.Colors.SURFACE_CONTAINER_LOW,
             border=ft.Border.all(1, ft.Colors.OUTLINE_VARIANT),
+            tooltip=f"{disk.mount}: {human(disk.used)} used of {human(disk.total)}",
         )
 
     def folder_row(folder: overview.Folder, biggest: int, measuring: bool = False) -> ft.Control:
         size: ft.Control = (
-            ft.ProgressRing(width=16, height=16, stroke_width=2)
+            ft.ProgressRing(width=14, height=14, stroke_width=2)
             if measuring
             else ft.Text(folder.size_label, weight=ft.FontWeight.W_600, color=None if folder.measured else MUTED)
         )
+        # Two lines at most: the path and file count live in the tooltip, the
+        # "is this normal" note stays on screen -- it is the point of the page.
         lines: list[ft.Control] = [
-            _field_row(
-                ft.Icon(ft.Icons.FOLDER_OUTLINED, color=ft.Colors.PRIMARY),
-                ft.Column(
-                    [ft.Text(folder.label, weight=ft.FontWeight.W_600), _muted(folder.detail)],
-                    spacing=0,
-                    tight=True,
-                    expand=True,
-                ),
-                size,
-            )
+            _field_row(ft.Text(folder.label, weight=ft.FontWeight.W_600, expand=True), size)
         ]
         if folder.measured and biggest:
-            lines.append(ft.ProgressBar(value=folder.bytes / biggest, bar_height=6, border_radius=3))
+            lines.append(ft.ProgressBar(value=folder.bytes / biggest, bar_height=4, border_radius=2))
         if folder.note:
-            lines.append(_muted(folder.note, italic=True))
-        return ft.Container(ft.Column(lines, spacing=6, tight=True), padding=ft.Padding.symmetric(vertical=10))
+            lines.append(_muted(folder.note, max_lines=2, overflow=ft.TextOverflow.ELLIPSIS))
+        return ft.Container(ft.Column(lines, spacing=3, tight=True), padding=ft.Padding.symmetric(vertical=6),
+                            tooltip=folder.detail)
 
     def render(measuring: int = -1) -> None:
         biggest = max((f.bytes for f in found if f.measured), default=0)
@@ -236,7 +220,7 @@ def _overview_page(page: ft.Page, on_scan) -> tuple[ft.Control, object]:
         """Instant: the OS line, the disks, and the folder list unmeasured."""
         found[:] = overview.folders()
         os_line.value = overview.os_name()
-        disks.controls = [disk_card(d) for d in overview.disks()]
+        disks.controls = [disk_tile(d) for d in overview.disks()]
         # Not measured here. On Windows these folders are hundreds of thousands
         # of files, and walking them the moment the window opens is disk load
         # nobody asked for.
@@ -256,44 +240,37 @@ def _overview_page(page: ft.Page, on_scan) -> tuple[ft.Control, object]:
 
     scan_card = _card(
         _field_row(
-            ft.Icon(ft.Icons.CLEANING_SERVICES, color=ft.Colors.ON_PRIMARY_CONTAINER, size=32),
-            ft.Column(
-                [
-                    ft.Text("Free up space", size=18, weight=ft.FontWeight.W_600),
-                    ft.Text(
-                        "Cleam checks temp folders, browser and app caches, crash dumps, old logs and"
-                        " developer caches. Scanning only reads; nothing is deleted until you confirm.",
-                        size=13,
-                    ),
-                ],
-                spacing=2,
-                tight=True,
-                expand=True,
-            ),
+            ft.Icon(ft.Icons.CLEANING_SERVICES, color=ft.Colors.ON_PRIMARY_CONTAINER),
+            ft.Column([ft.Text("Free up space", size=16, weight=ft.FontWeight.W_600),
+                       ft.Text("Caches, temp files, crash dumps, old logs. Scanning only reads.", size=12)],
+                      spacing=0, tight=True, expand=True),
+            ft.FilledButton("Scan", icon=ft.Icons.SEARCH, on_click=lambda _: on_scan()),
         ),
-        _buttons(ft.FilledButton("Scan for junk", icon=ft.Icons.SEARCH, on_click=lambda _: on_scan())),
         bgcolor=ft.Colors.PRIMARY_CONTAINER,
     )
     folders_card = _card(
         _field_row(
-            ft.Column(
-                [
-                    ft.Text("Where the space went", size=18, weight=ft.FontWeight.W_600),
-                    _muted("Each folder says what is normal and what actually shrinks it."),
-                ],
-                spacing=2,
-                tight=True,
-                expand=True,
-            ),
+            ft.Column([ft.Text("Where the space went", size=16, weight=ft.FontWeight.W_600),
+                       _muted("What is normal, and what shrinks it.")], spacing=0, tight=True, expand=True),
             ft.Button("Measure", icon=ft.Icons.STRAIGHTEN, on_click=lambda _: _worker(page, busy, measure)),
         ),
         busy,
         folder_rows,
-        spacing=8,
+        spacing=6,
+    )
+    # Two columns side by side on a normal window, so the page fits without
+    # scrolling; stacked below 768 px, where scrolling is the lesser evil.
+    body = ft.ResponsiveRow(
+        [
+            ft.Column([disks, scan_card], spacing=12, col={"xs": 12, "md": 5}),
+            ft.Column([folders_card], col={"xs": 12, "md": 7}),
+        ],
+        spacing=16,
+        run_spacing=12,
     )
     control = ft.Column(
-        [_header("Overview", os_line), disks, scan_card, folders_card],
-        spacing=20,
+        [_header("Overview", os_line), body],
+        spacing=12,
         scroll=ft.ScrollMode.AUTO,
         expand=True,
         horizontal_alignment=ft.CrossAxisAlignment.STRETCH,
@@ -306,12 +283,12 @@ def _overview_page(page: ft.Page, on_scan) -> tuple[ft.Control, object]:
 
 def _clean_page(page: ft.Page) -> tuple[ft.Control, object, object]:
     busy = ft.ProgressBar(visible=False, border_radius=2)
-    headline = ft.Text("Not scanned yet", size=34, weight=ft.FontWeight.W_700)
-    detail = ft.Text("Scanning only reads. Nothing is deleted until you confirm.", color=MUTED)
+    headline = ft.Text("Not scanned yet", size=28, weight=ft.FontWeight.W_700)
+    detail = _muted("Scanning only reads. Nothing is deleted until you confirm.")
     status = _muted("")
-    outcome = ft.Container(visible=False, padding=12, border_radius=12)
-    sections = ft.Column(spacing=16)
-    footnote = ft.Column(spacing=4)
+    outcome = ft.Container(visible=False, padding=10, border_radius=12)
+    groups_col = ft.Column(spacing=0)
+    footnote = _muted("")
     snapshot_first = ft.Switch(label="Restore point first", value=False)
     # (target, result or None before it is scanned, checkbox). The target list
     # is captured once per scan and reused for the dialog and the delete.
@@ -320,6 +297,9 @@ def _clean_page(page: ft.Page) -> tuple[ft.Control, object, object]:
     rows: list[tuple[junk.Target, junk.Result | None, ft.Checkbox]] = []
     missing: list[junk.Target] = []
     group_boxes: list[tuple[ft.Checkbox, list[ft.Checkbox]]] = []  # (section checkbox, its live rows)
+    # Groups start folded so the page fits on one screen; one the user opened
+    # stays open while a scan re-renders the list.
+    opened: set[str] = set()
 
     def selected() -> list[tuple[junk.Target, junk.Result | None, ft.Checkbox]]:
         return [row for row in rows if row[2].value and row[1] and row[1].files]
@@ -327,8 +307,7 @@ def _clean_page(page: ft.Page) -> tuple[ft.Control, object, object]:
     def totals() -> None:
         found = sum(r.bytes for _, r, _ in rows if r)
         chosen = sum(r.bytes for _, r, _ in selected() if r)
-        scanned = any(r for _, r, _ in rows)
-        if scanned:
+        if any(r for _, r, _ in rows):
             headline.value = human(found) if found else "All clean"
             files = sum(r.files for _, r, _ in rows if r)
             detail.value = f"found in {files:,} files · {human(chosen)} selected" if found else "Nothing to remove."
@@ -348,7 +327,6 @@ def _clean_page(page: ft.Page) -> tuple[ft.Control, object, object]:
             # screen reader announcing "checkbox, unchecked" with the name
             # somewhere else is useless.
             label=target.label,
-            label_style=ft.TextStyle(size=15, weight=ft.FontWeight.W_500),
             value=not nothing and not target.opt_in,  # the Recycle Bin is never pre-selected
             disabled=nothing,
             on_change=on_tick,
@@ -360,42 +338,38 @@ def _clean_page(page: ft.Page) -> tuple[ft.Control, object, object]:
         totals()
         page.update()
 
+    def state_of(target: junk.Target, result: junk.Result | None, current: bool) -> str:
+        if current:
+            return "scanning…"
+        if result is None:
+            return "not scanned yet"
+        if result.skipped:
+            return result.skipped
+        if not result.files:
+            return "nothing to clean"
+        state = f"{result.files:,} files"
+        if result.errors:
+            state += f", {result.errors} in use"
+        return state + (" · tick to include" if target.opt_in else "")
+
     def target_row(target: junk.Target, result: junk.Result | None, box: ft.Checkbox, current: bool) -> ft.Control:
-        if current:
-            state = "scanning…"
-        elif result is None:
-            state = "not scanned yet"
-        elif result.skipped:
-            state = result.skipped
-        elif not result.files:
-            state = "nothing to clean"
-        else:
-            state = f"{result.files:,} files"
-            if result.errors:
-                state += f" · {result.errors} in use or denied"
-            if target.opt_in:
-                state += " · tick to include"
-        if current:
-            size: ft.Control = ft.ProgressRing(width=16, height=16, stroke_width=2)
-        else:
-            has = bool(result and result.files)
-            size = ft.Text(
-                human(result.bytes) if has else "—",
-                weight=ft.FontWeight.W_600 if has else None,
-                color=None if has else MUTED,
-            )
+        has = bool(result and result.files)
+        size: ft.Control = (
+            ft.ProgressRing(width=14, height=14, stroke_width=2) if current
+            else ft.Text(human(result.bytes) if has else "—", weight=ft.FontWeight.W_600 if has else None,
+                         color=None if has else MUTED)
+        )
         return ft.ListTile(
             title=box,
             subtitle=ft.Container(  # indented to sit under the label, not under the box
-                ft.Column(
-                    [_muted(target.about), ft.Text(state, size=12, weight=ft.FontWeight.W_500)],
-                    spacing=2,
-                    tight=True,
-                ),
+                _muted(f"{state_of(target, result, current)} — {target.about}", max_lines=2,
+                       overflow=ft.TextOverflow.ELLIPSIS),
                 padding=ft.Padding.only(left=34),
             ),
             trailing=size,
-            content_padding=ft.Padding.only(left=0, right=8),
+            dense=True,
+            content_padding=ft.Padding.only(left=8, right=8),
+            tooltip=target.about,
         )
 
     def group_box(group: str, members: list) -> ft.Checkbox:
@@ -410,37 +384,53 @@ def _clean_page(page: ft.Page) -> tuple[ft.Control, object, object]:
                 box.value = on
             on_tick()
 
-        header = ft.Checkbox(
-            label=group,
-            label_style=ft.TextStyle(size=17, weight=ft.FontWeight.W_600),
-            disabled=not live,
-            on_change=toggle,
-        )
+        header = ft.Checkbox(label=group, label_style=ft.TextStyle(weight=ft.FontWeight.W_600),
+                             disabled=not live, on_change=toggle)
         group_boxes.append((header, live))
         return header
 
     def render(current: int = -1) -> None:
-        sections.controls.clear()
+        groups_col.controls.clear()
         group_boxes.clear()
         for group, icon in GROUPS.items():
             members = [(i, row) for i, row in enumerate(rows) if row[0].group == group]
             if not members:
                 continue
             size = sum(r.bytes for _, (_, r, _) in members if r)
-            header = _field_row(
-                ft.Icon(icon, color=ft.Colors.PRIMARY),
-                group_box(group, [row for _, row in members]),
-                ft.Container(expand=True),
-                ft.Text(human(size) if size else "", size=16, weight=ft.FontWeight.W_600),
-            )
-            tiles = [target_row(*row, current=(i == current)) for i, row in members]
-            sections.controls.append(_card(header, ft.Divider(height=1), *tiles, spacing=4))
+            with_junk = sum(1 for _, (_, r, _) in members if r and r.files)
+            scanning = any(i == current for i, _ in members)
+
+            def fold(e, g=group) -> None:
+                (opened.add if e.data in (True, "true") else opened.discard)(g)
+
+            groups_col.controls.append(ft.ExpansionTile(
+                leading=ft.Icon(icon, color=ft.Colors.PRIMARY),
+                title=_field_row(
+                    group_box(group, [row for _, row in members]),
+                    ft.Container(expand=True),
+                    ft.ProgressRing(width=14, height=14, stroke_width=2) if scanning
+                    else ft.Text(human(size) if size else "", weight=ft.FontWeight.W_600),
+                ),
+                subtitle=_muted(f"{len(members)} place{'s' * (len(members) != 1)}"
+                                + (f", {with_junk} with something to remove"
+                                                             if with_junk else "")),
+                controls=[target_row(*row, current=(i == current)) for i, row in members],
+                expanded=group in opened,
+                maintain_state=True,
+                on_change=fold,
+                dense=True,
+            ))
         clean = [t.label for t, r, _ in rows if r and not r.skipped and not r.files]
-        footnote.controls = []
+        parts = []
         if clean:
-            footnote.controls.append(_muted(f"Already clean: {', '.join(clean)}."))
+            parts.append(f"{len(clean)} places already clean")
         if missing:
-            footnote.controls.append(_muted(f"Not on this computer: {', '.join(t.label for t in missing)}."))
+            parts.append(f"{len(missing)} not on this computer")
+        footnote.value = " · ".join(parts)
+        footnote.tooltip = "\n".join(
+            ([f"Already clean: {', '.join(clean)}"] if clean else [])
+            + ([f"Not on this computer: {', '.join(t.label for t in missing)}"] if missing else [])
+        ) or None
         totals()
 
     def split(found: list[junk.Target]) -> list[junk.Target]:
@@ -473,23 +463,25 @@ def _clean_page(page: ft.Page) -> tuple[ft.Control, object, object]:
         render()
         page.update()
 
-    def show_outcome(message: str, ok: bool) -> None:
-        outcome.bgcolor = ft.Colors.PRIMARY_CONTAINER if ok else ft.Colors.ERROR_CONTAINER
-        color = ft.Colors.ON_PRIMARY_CONTAINER if ok else ft.Colors.ON_ERROR_CONTAINER
-        outcome.content = _field_row(
-            ft.Icon(ft.Icons.CHECK_CIRCLE if ok else ft.Icons.ERROR_OUTLINE, color=color),
-            ft.Text(message, color=color, expand=True),
-        )
+    def show_outcome(message: str, tone: str) -> None:
+        """tone: ok (something freed), warn (nothing could be), bad (nothing was tried)."""
+        bg, fg, icon = {
+            "ok": (ft.Colors.PRIMARY_CONTAINER, ft.Colors.ON_PRIMARY_CONTAINER, ft.Icons.CHECK_CIRCLE),
+            "warn": (ft.Colors.TERTIARY_CONTAINER, ft.Colors.ON_TERTIARY_CONTAINER, ft.Icons.WARNING_AMBER),
+            "bad": (ft.Colors.ERROR_CONTAINER, ft.Colors.ON_ERROR_CONTAINER, ft.Icons.ERROR_OUTLINE),
+        }[tone]
+        outcome.bgcolor = bg
+        outcome.content = _field_row(ft.Icon(icon, color=fg), ft.Text(message, color=fg, expand=True))
         outcome.visible = True
 
     def clean(chosen: list[tuple[junk.Target, junk.Result | None, ft.Checkbox]]) -> None:
         outcome.visible = False
         if snapshot_first.value:
-            status.value = "Creating a restore point…"
+            status.value = "Creating a restore point… (Windows takes a minute or two)"
             page.update()
             code, text = snapshot.create("Cleam: before clean", capture=True)
             if code != 0:
-                show_outcome(f"Nothing deleted: the restore point failed. {text}", ok=False)
+                show_outcome(f"Nothing deleted: the restore point failed. {text}", "bad")
                 status.value = ""
                 page.update()
                 return
@@ -501,10 +493,17 @@ def _clean_page(page: ft.Page) -> tuple[ft.Control, object, object]:
             result = junk.run(target, delete=True)
             freed += result.bytes
             errors += result.errors
-        message = f"Freed {human(freed)}."
-        if errors:
-            message += f" {errors:,} items were in use or denied and stayed."
-        show_outcome(message, ok=True)
+        if freed:
+            message = f"Freed {human(freed)}."
+            if errors:
+                message += f" {errors:,} files were in use and stayed."
+            show_outcome(message, "ok")
+        elif errors:
+            # Not a success: "Freed 0 B" on a green banner read as one.
+            show_outcome(f"Nothing could be removed: {errors:,} files are in use. Close the programs using them"
+                         " (browsers, games, the app itself) and clean again.", "warn")
+        else:
+            show_outcome("Nothing was left to remove.", "ok")
         scan(keep_outcome=True)  # re-scan, so the list shows what is actually left
 
     def ask_clean(_) -> None:
@@ -539,32 +538,46 @@ def _clean_page(page: ft.Page) -> tuple[ft.Control, object, object]:
             danger=True,
         )
 
-    clean_button = ft.FilledButton("Clean selected", icon=ft.Icons.DELETE_SWEEP, disabled=True, on_click=ask_clean)
-    summary = _card(
-        ft.Column([headline, detail], spacing=0, tight=True),
-        _buttons(
-            ft.FilledTonalButton("Scan", icon=ft.Icons.SEARCH, on_click=lambda _: start_scan()),
-            clean_button,
-            snapshot_first,
-        ),
-        busy,
-        status,
-    )
-
     def start_scan() -> None:
         _worker(page, busy, scan)
 
+    clean_button = ft.FilledButton("Clean selected", icon=ft.Icons.DELETE_SWEEP, disabled=True, on_click=ask_clean)
+    summary = _card(
+        ft.ResponsiveRow(
+            [
+                ft.Column([headline, detail], spacing=0, tight=True, col={"xs": 12, "md": 5}),
+                ft.Container(
+                    _buttons(ft.FilledTonalButton("Scan", icon=ft.Icons.SEARCH, on_click=lambda _: start_scan()),
+                             clean_button, snapshot_first),
+                    col={"xs": 12, "md": 7},
+                    alignment=ft.Alignment.CENTER_RIGHT,
+                ),
+            ],
+            vertical_alignment=ft.CrossAxisAlignment.CENTER,
+            run_spacing=8,
+        ),
+        busy,
+        status,
+        spacing=6,
+    )
+    groups_card = ft.Container(
+        groups_col,
+        border_radius=16,
+        bgcolor=ft.Colors.SURFACE_CONTAINER_LOW,
+        border=ft.Border.all(1, ft.Colors.OUTLINE_VARIANT),
+        clip_behavior=ft.ClipBehavior.ANTI_ALIAS,
+    )
     controls: list[ft.Control] = [
         _header("Clean", "Caches, temp files and crash leftovers that are safe to remove."),
         summary,
         outcome,
-        sections,
+        groups_card,
         footnote,
     ]
     if banner := _admin_banner(page):
         controls.insert(1, banner)
     control = ft.Column(
-        controls, spacing=16, scroll=ft.ScrollMode.AUTO, expand=True, horizontal_alignment=ft.CrossAxisAlignment.STRETCH
+        controls, spacing=12, scroll=ft.ScrollMode.AUTO, expand=True, horizontal_alignment=ft.CrossAxisAlignment.STRETCH
     )
     return control, start_scan, lambda: _worker(page, busy, preview)
 
@@ -718,25 +731,26 @@ STATE_ICON = {
 STATE_WORD = {security.OK: "OK", security.WARN: "Check", security.BAD: "Problem", security.UNKNOWN: "Unknown"}
 
 
-def _state_row(state: str, title: str, lines: list[str]) -> ft.Control:
+def _state_row(state: str, title: str, lines: list[str], tooltip: str | None = None) -> ft.Control:
     icon, color = STATE_ICON[state]
     body: list[ft.Control] = [
         # The state is a word as well as a colour: "Problem", not only red.
-        ft.Text(f"{title} · {STATE_WORD[state]}", weight=ft.FontWeight.W_600),
+        ft.Text(f"{title} · {STATE_WORD[state]}", weight=ft.FontWeight.W_600, size=13),
     ]
-    body += [_muted(line, selectable=True) for line in lines if line]
+    body += [_muted(line, max_lines=3, overflow=ft.TextOverflow.ELLIPSIS) for line in lines if line]
     return ft.Container(
         _field_row(
-            ft.Icon(icon, color=color, semantics_label=STATE_WORD[state]),
-            ft.Column(body, spacing=2, tight=True, expand=True),
+            ft.Icon(icon, color=color, size=20, semantics_label=STATE_WORD[state]),
+            ft.Column(body, spacing=1, tight=True, expand=True),
         ),
-        padding=ft.Padding.symmetric(vertical=8),
+        padding=ft.Padding.symmetric(vertical=5),
+        tooltip=tooltip,
     )
 
 
 def _security_page(page: ft.Page) -> tuple[ft.Control, object]:
     busy = ft.ProgressBar(visible=False, border_radius=2)
-    summary = ft.Text("Checking…", size=28, weight=ft.FontWeight.W_700)
+    summary = ft.Text("Checking…", size=24, weight=ft.FontWeight.W_700)
     summary_detail = _muted("")
     checks_col = ft.Column(spacing=0)
     startup_col = ft.Column(spacing=0)
@@ -753,8 +767,11 @@ def _security_page(page: ft.Page) -> tuple[ft.Control, object]:
         summary_detail.value = (
             f"{len(bad)} problem(s), {len(warn)} to check." if bad or warn else "Nothing needs your attention."
         )
-        checks_col.controls = [_state_row(c.state, c.label, [c.detail, c.fix and f"How to fix: {c.fix}"])
-                               for c in checks]
+        checks_col.controls = [
+            _state_row(c.state, c.label, [c.detail, c.fix and f"How to fix: {c.fix}"],
+                       tooltip=c.fix or None)  # the whole fix, where three lines cut it short
+            for c in checks
+        ]
         scan_button.disabled = not security.can_quick_scan(checks)
         scan_button.tooltip = None if not scan_button.disabled else "Microsoft Defender is not running"
 
@@ -769,8 +786,9 @@ def _security_page(page: ft.Page) -> tuple[ft.Control, object]:
         ] + [
             _state_row(
                 security.WARN if i.suspicious else security.OK,
-                i.name + ("" if i.enabled else " (switched off)"),
-                [i.command, f"Publisher: {i.publisher}" if i.publisher else "", *i.reasons],
+                i.name + ("" if i.enabled else " (switched off)") + (f" — {i.publisher}" if i.publisher else ""),
+                i.reasons,
+                tooltip=i.command,  # full command lines are long paths; hover shows them
             )
             for i in items
         ]
@@ -811,25 +829,31 @@ def _security_page(page: ft.Page) -> tuple[ft.Control, object]:
     )
     ransom_card = _card(
         _field_row(
-            ft.Column([ft.Text("Ransomware", size=18, weight=ft.FontWeight.W_600), ransom_status],
+            ft.Column([ft.Text("Ransomware", size=16, weight=ft.FontWeight.W_600), ransom_status],
                       spacing=2, tight=True, expand=True),
             ft.Button("Look for signs", icon=ft.Icons.SEARCH, on_click=lambda _: _worker(page, busy, ransom)),
         ),
         ransom_col,
     )
     startup_card = _card(
-        ft.Text("Starts with Windows" if OS == "windows" else "Starts at login", size=18, weight=ft.FontWeight.W_600),
-        _muted("Where malware keeps itself running. Odd entries are listed first, with the reason."),
+        ft.Text("Starts with Windows" if OS == "windows" else "Starts at login", size=16, weight=ft.FontWeight.W_600),
+        _muted("Where malware keeps itself running. Odd ones first; hover for the command."),
         startup_col,
+    )
+    body = ft.ResponsiveRow(
+        [
+            ft.Column([protection, ransom_card], spacing=12, col={"xs": 12, "md": 7}),
+            ft.Column([startup_card], col={"xs": 12, "md": 5}),
+        ],
+        spacing=16,
+        run_spacing=12,
     )
     control = ft.Column(
         [
             _header("Security", "Cleam checks and explains; your antivirus removes threats. Nothing here deletes anything."),
-            protection,
-            ransom_card,
-            startup_card,
+            body,
         ],
-        spacing=16,
+        spacing=12,
         scroll=ft.ScrollMode.AUTO,
         expand=True,
         horizontal_alignment=ft.CrossAxisAlignment.STRETCH,

@@ -1,4 +1,4 @@
-"""Windows Disk Cleanup's own handlers, driven from Cleam.
+"""Windows' own cleaners, driven from Cleam: Disk Cleanup handlers, and pnputil.
 
 Some Windows leftovers are only safe to remove through Windows: old driver
 packages have to be unregistered from the driver store, not deleted from
@@ -16,6 +16,8 @@ import json
 import os
 import subprocess
 from pathlib import Path
+
+from .system import NO_WINDOW
 
 SLOT = 619  # cleanmgr sageset slots are 0-9999; this one is Cleam's
 HANDLERS_KEY = r"HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Explorer\VolumeCaches"
@@ -37,7 +39,7 @@ def sagerun_script(handlers: tuple[str, ...]) -> str:
         # flags never depends on how PowerShell treats `exit` inside `try`.
         "$code = 1; try { foreach ($h in $want) { if (-not (Test-Path \"$base\\$h\")) { throw \"no handler $h\" };"
         " New-ItemProperty -Path \"$base\\$h\" -Name $flag -Value 2 -PropertyType DWord -Force | Out-Null };"
-        f" $p = Start-Process cleanmgr.exe -ArgumentList '/sagerun:{SLOT}' -Wait -PassThru; $code = $p.ExitCode }}"
+        f" $p = Start-Process cleanmgr.exe -ArgumentList '/sagerun:{SLOT}' -WindowStyle Hidden -Wait -PassThru; $code = $p.ExitCode }}"
         " finally { foreach ($h in $want) { Remove-ItemProperty -Path \"$base\\$h\" -Name $flag"
         " -ErrorAction SilentlyContinue } }; exit $code"
     )
@@ -96,7 +98,7 @@ def list_drivers() -> list[dict]:
             text=True,
             timeout=120,
             stdin=subprocess.DEVNULL,
-            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+            creationflags=NO_WINDOW,
         ).stdout
         data = json.loads(out) if out.strip() else []
     except (OSError, subprocess.SubprocessError, ValueError):
@@ -118,3 +120,28 @@ def old_driver_packages() -> tuple[int, int]:
         files += f
         size += b
     return files, size
+
+
+def delete_old_driver_packages() -> int:
+    """Remove every superseded driver package with pnputil; returns how many Windows refused.
+
+    What Disk Cleanup's "Device driver packages" does, without its dialog
+    (cleanmgr draws one that no window flag hides). No /force: Windows refuses
+    a package a device still uses, and that refusal is counted, not overridden.
+    pnputil's output is localized, so only its exit code is read.
+    """
+    refused = 0
+    for d in superseded(list_drivers()):
+        try:
+            done = subprocess.run(
+                ["pnputil", "/delete-driver", str(d["Driver"])],
+                capture_output=True,
+                text=True,
+                timeout=120,
+                stdin=subprocess.DEVNULL,
+                creationflags=NO_WINDOW,
+            )
+            refused += done.returncode != 0
+        except (OSError, subprocess.SubprocessError, KeyError):
+            refused += 1
+    return refused

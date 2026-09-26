@@ -155,6 +155,33 @@ class RansomSigns(unittest.TestCase):
         self.assertEqual(s.ransom_signs([self.root]).notes, [])
 
 
+class NoConsoleWindows(unittest.TestCase):
+    """The window build has no console, so every captured child must ask for
+    none, or Windows opens a PowerShell window over Cleam (seen for the
+    restore point)."""
+
+    def test_captured_children_ask_for_no_window(self):
+        from unittest import mock
+        from cleam import snapshot, system
+
+        done = mock.Mock(returncode=0, stdout="", stderr="")
+        with mock.patch("subprocess.run", return_value=done) as run, \
+                mock.patch.object(snapshot, "_command", return_value=["powershell", "-c", "x"]):
+            snapshot.create("t", capture=True)
+            system.output(["whoami"])
+            with mock.patch.object(wincleanup, "list_drivers", return_value=[
+                {"Driver": "oem1.inf", "OriginalFileName": r"C:\R\a.inf_1\a.inf", "Version": "1", "ProviderName": "p", "ClassName": "c"},
+                {"Driver": "oem2.inf", "OriginalFileName": r"C:\R\a.inf_2\a.inf", "Version": "2", "ProviderName": "p", "ClassName": "c"},
+            ]):
+                self.assertEqual(wincleanup.delete_old_driver_packages(), 0)
+        for call in run.call_args_list:
+            self.assertEqual(call.kwargs.get("creationflags"), system.NO_WINDOW, call.args)
+        self.assertIn(["pnputil", "/delete-driver", "oem1.inf"], [c.args[0] for c in run.call_args_list])
+
+    def test_disk_cleanup_is_started_hidden(self):
+        self.assertIn("-WindowStyle Hidden", wincleanup.sagerun_script(("Temporary Setup Files",)))
+
+
 class DriverPackages(unittest.TestCase):
     def test_only_older_versions_of_the_same_package(self):
         drivers = [

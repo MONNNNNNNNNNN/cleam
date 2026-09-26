@@ -10,6 +10,12 @@ import sys
 
 OS = "windows" if os.name == "nt" else "macos" if sys.platform == "darwin" else "linux"
 
+# For every child whose output Cleam captures. The window build has no console
+# of its own, so without this Windows opens one per child: a blue PowerShell
+# window for the restore point, a flash for `whoami` on every scan. Never for
+# a child that must talk to the user (a CLI sudo prompt, an uninstaller).
+NO_WINDOW = getattr(subprocess, "CREATE_NO_WINDOW", 0)
+
 
 def is_admin() -> bool:
     if OS == "windows":
@@ -72,6 +78,6 @@ def relaunch_as_admin() -> bool:
 def output(cmd: list[str]) -> str:
     """stdout of cmd, or "" if it is missing or fails. For read-only queries only."""
     try:
-        return subprocess.run(cmd, capture_output=True, text=True, check=True).stdout
+        return subprocess.run(cmd, capture_output=True, text=True, check=True, creationflags=NO_WINDOW).stdout
     except (OSError, subprocess.CalledProcessError):
         return ""

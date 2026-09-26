@@ -10,7 +10,7 @@ from __future__ import annotations
 import shutil
 import subprocess
 
-from .system import OS, is_admin, sudo
+from .system import NO_WINDOW, OS, is_admin, sudo
 
 
 def _powershell(script: str) -> list[str]:
@@ -55,7 +55,7 @@ def run(action: str, description: str = "Cleam", capture: bool = False) -> tuple
         return 1, cmd
     try:
         if capture:
-            p = subprocess.run(cmd, capture_output=True, text=True)
+            p = subprocess.run(cmd, capture_output=True, text=True, creationflags=NO_WINDOW)
             return p.returncode, (p.stdout + p.stderr).strip()
         return subprocess.run(cmd).returncode, ""
     except OSError as e:

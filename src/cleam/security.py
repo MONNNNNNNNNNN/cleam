@@ -28,7 +28,7 @@ import time
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from .system import OS
+from .system import NO_WINDOW, OS
 
 OK, WARN, BAD, UNKNOWN = "ok", "warn", "bad", "unknown"
 
@@ -50,7 +50,7 @@ def _powershell(script: str, timeout: int = 60) -> str:
             text=True,
             timeout=timeout,
             stdin=subprocess.DEVNULL,
-            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+            creationflags=NO_WINDOW,
         ).stdout
     except (OSError, subprocess.SubprocessError):
         return ""
@@ -199,7 +199,7 @@ def quick_scan(timeout: int = 3600) -> tuple[int, str]:
             text=True,
             timeout=timeout,
             stdin=subprocess.DEVNULL,
-            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+            creationflags=NO_WINDOW,
         )
     except (OSError, subprocess.SubprocessError) as e:
         return 1, f"The scan could not start: {e}"

@@ -211,6 +211,16 @@ class CommandMode(unittest.TestCase):
         res = junk.run(self.target(f"import shutil; shutil.rmtree(r'{self.root}')"), delete=True)
         self.assertEqual((res.files, res.bytes, res.errors), (2, 150, 0))
 
+    def test_a_runner_replaces_the_command_and_its_refusals_are_errors(self):
+        def runner():
+            import shutil as sh
+            sh.rmtree(self.root / "a")
+            return 2  # e.g. two driver packages still in use
+        t = junk.Target("drv", "drv", (self.root,), mode="command", command=(sys.executable,), runner="fake")
+        with mock.patch.dict(junk.RUNNERS, {"fake": runner}):
+            res = junk.run(t, delete=True)
+        self.assertEqual((res.files, res.bytes, res.errors), (1, 100, 2))
+
     def test_failing_tool_is_an_error_not_a_success(self):
         res = junk.run(self.target("raise SystemExit(3)"), delete=True)
         self.assertEqual((res.bytes, res.errors), (0, 1))

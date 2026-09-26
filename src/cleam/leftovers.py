@@ -27,7 +27,7 @@ from dataclasses import asdict, dataclass, field
 from pathlib import Path
 
 from .overview import size
-from .system import OS, output, sudo
+from .system import NO_WINDOW, OS, output, sudo
 
 # Words too generic to identify anything. "Microsoft" alone must never match.
 NOISE = frozenset(
@@ -267,18 +267,20 @@ def remove(items: list[Leftover], label: str = "app") -> tuple[Path, list[str]]:
             if item.kind == "registry":
                 export = backup / "registry" / f"{index}.reg"
                 done = subprocess.run(
-                    ["reg", "export", item.target, str(export), "/y"], capture_output=True, text=True
+                    ["reg", "export", item.target, str(export), "/y"], capture_output=True, text=True,
+                    creationflags=NO_WINDOW,
                 )
                 if done.returncode != 0:
                     errors.append(f"{item.target}: could not export, left in place")
                     continue
-                deleted = subprocess.run(["reg", "delete", item.target, "/f"], capture_output=True, text=True)
+                deleted = subprocess.run(["reg", "delete", item.target, "/f"], capture_output=True, text=True,
+                                         creationflags=NO_WINDOW)
                 if deleted.returncode != 0:
                     errors.append(f"{item.target}: {deleted.stderr.strip() or 'could not delete'}")
                     continue
                 manifest.append({**asdict(item), "backup": str(export)})
             elif item.kind == "package-config":
-                done = subprocess.run(item.command, capture_output=True, text=True)
+                done = subprocess.run(item.command, capture_output=True, text=True, creationflags=NO_WINDOW)
                 if done.returncode != 0:
                     errors.append(f"{item.target}: {done.stderr.strip() or 'purge failed'}")
                     continue
@@ -308,7 +310,7 @@ def restore(backup: Path | str) -> list[str]:
         source, target, kind = entry.get("backup", ""), entry["target"], entry["kind"]
         try:
             if kind == "registry":
-                done = subprocess.run(["reg", "import", source], capture_output=True, text=True)
+                done = subprocess.run(["reg", "import", source], capture_output=True, text=True, creationflags=NO_WINDOW)
                 if done.returncode != 0:
                     errors.append(f"{target}: {done.stderr.strip() or 'import failed'}")
             elif kind == "package-config":
