@@ -274,7 +274,20 @@ def biggest(root: Path | str, top: int = 10) -> list[Folder]:
     except OSError:
         return found
     for entry in entries:
-        files, total, denied = size(entry.path)
+        try:
+            st = os.lstat(entry.path)
+        except OSError:
+            continue
+        # A junction or symlink is someone else's folder under another name.
+        # C:\ holds "Documents and Settings" -> C:\Users, and the profile holds
+        # "Application Data" and "Local Settings": sizing them counted
+        # C:\Users twice and AppData\Local three times.
+        if getattr(st, "st_file_attributes", 0) & REPARSE or stat.S_ISLNK(st.st_mode):
+            continue
+        if stat.S_ISDIR(st.st_mode):
+            files, total, denied = size(entry.path)
+        else:  # pagefile.sys and hiberfil.sys are files, and among the biggest things on C:
+            files, total, denied = 1, st.st_size, 0
         found.append(
             Folder(entry.name, Path(entry.path), files=files, bytes=total, denied=denied, measured=True)
         )

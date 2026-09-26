@@ -6,7 +6,7 @@ import json
 import sys
 from dataclasses import asdict
 
-from . import __version__, apps, junk, leftovers, overview, snapshot
+from . import __version__, apps, junk, leftovers, overview, security, snapshot
 from .system import human
 
 
@@ -50,10 +50,12 @@ def cmd_biggest(args) -> int:
     return 0
 
 
-def _selected(only: str | None) -> list[junk.Target]:
+def _selected(only: str | None, opt_in: bool = True) -> list[junk.Target]:
+    """Targets named by --only, else all of them; opt_in=False leaves out the
+    opt-in ones (the bin, package caches) unless they are named."""
     all_targets = junk.targets()
     if not only:
-        return all_targets
+        return [t for t in all_targets if opt_in or not t.opt_in]
     wanted = set(only.split(","))
     unknown = wanted - {t.id for t in all_targets}
     if unknown:
@@ -66,14 +68,30 @@ def _report(results: list[junk.Result], as_json: bool) -> None:
     if as_json:
         print(json.dumps([asdict(r) for r in results], indent=2))
         return
-    print(f"{'Target':<16}{'Files':>8}{'Size':>12}  Note")
+    print(f"{'Target':<24}{'Files':>8}{'Size':>12}  Note")
     for r in results:
         if r.skipped:
-            print(f"{r.id:<16}{'-':>8}{'-':>12}  {r.skipped}")
+            print(f"{r.id:<24}{'-':>8}{'-':>12}  {r.skipped}")
         else:
             note = f"{r.errors} in use or denied" if r.errors else ""
-            print(f"{r.id:<16}{r.files:>8}{human(r.bytes):>12}  {note}")
-    print(f"{'Total':<16}{sum(r.files for r in results):>8}{human(sum(r.bytes for r in results)):>12}")
+            print(f"{r.id:<24}{r.files:>8}{human(r.bytes):>12}  {note}")
+    print(f"{'Total':<24}{sum(r.files for r in results):>8}{human(sum(r.bytes for r in results)):>12}")
+
+
+def cmd_targets(args) -> int:
+    found = junk.targets()
+    if args.json:
+        print(json.dumps([asdict(t) for t in found], indent=2, default=str))
+        return 0
+    group = ""
+    for t in found:
+        if t.group != group:
+            group = t.group
+            print(f"\n{group}")
+        flags = ", ".join(f for f, on in (("admin", t.admin), ("opt-in", t.opt_in)) if on)
+        print(f"  {t.id:<24}{t.label}" + (f"  [{flags}]" if flags else ""))
+        print(f"  {'':<24}{t.about}")
+    return 0
 
 
 def cmd_scan(args) -> int:
@@ -82,7 +100,9 @@ def cmd_scan(args) -> int:
 
 
 def cmd_clean(args) -> int:
-    targets = _selected(args.only)
+    # A bare `clean --yes` (a cron job) must not empty the Recycle Bin or wipe
+    # every package cache daily: the opt-in targets need --only or --all.
+    targets = _selected(args.only, opt_in=args.all)
     if not args.yes:
         _report([junk.run(t) for t in targets], args.json)
         if not args.json:
@@ -181,6 +201,47 @@ def cmd_restore(args) -> int:
     return 1 if errors else 0
 
 
+SYMBOL = {"ok": "ok  ", "warn": "WARN", "bad": "BAD ", "unknown": "?   "}
+
+
+def cmd_security(args) -> int:
+    """Protection status, startup programs and signs of ransomware. Changes nothing."""
+    checks = security.status()
+    items = security.startup()
+    signs = security.ransom_signs()
+    if args.json:
+        print(json.dumps({"checks": [asdict(c) for c in checks], "startup": [asdict(i) for i in items],
+                          "ransomware": {**asdict(signs), "state": signs.state}}, indent=2))
+    else:
+        print("Protection")
+        for c in checks:
+            print(f"  {SYMBOL[c.state]} {c.label}: {c.detail}")
+            if c.fix:
+                print(f"       -> {c.fix}")
+        print(f"\nSigns of ransomware ({signs.files_checked} files in your folders"
+              + (", stopped early" if signs.truncated else "") + ")")
+        for line in signs.findings() or ["none found"]:
+            print(f"  {SYMBOL[signs.state]} {line}")
+        print("\nStartup programs")
+        for i in items:
+            mark = "WARN" if i.suspicious else "    "
+            state = "" if i.enabled else " (disabled)"
+            print(f"  {mark} {i.name}{state}  [{i.publisher or i.signed or '-'}]\n         {i.command}")
+            for reason in i.reasons:
+                print(f"         -> {reason}")
+    if args.scan:
+        if not security.can_quick_scan(checks):
+            print("\ncleam: Microsoft Defender is not running, so there is nothing to scan with.", file=sys.stderr)
+            return 1
+        print("\nRunning Microsoft Defender quick scan…", flush=True)
+        code, text = security.quick_scan()
+        print(text)
+        if code:
+            return code
+    bad = any(c.state == "bad" for c in checks) or signs.state == "bad"
+    return 1 if bad else 0
+
+
 def cmd_snapshot(args) -> int:
     code, text = (
         snapshot.list_snapshots() if args.action == "list" else snapshot.create(args.description)
@@ -205,6 +266,10 @@ def parser() -> argparse.ArgumentParser:
     b.add_argument("--json", action="store_true")
     b.set_defaults(fn=cmd_biggest)
 
+    t = sub.add_parser("targets", help="what each junk target is, and which need admin or a deliberate opt-in")
+    t.add_argument("--json", action="store_true")
+    t.set_defaults(fn=cmd_targets)
+
     s = sub.add_parser("scan", help="report junk per target (read-only)")
     s.add_argument("--only", metavar="IDS", help="comma-separated target ids")
     s.add_argument("--json", action="store_true")
@@ -213,6 +278,8 @@ def parser() -> argparse.ArgumentParser:
     c = sub.add_parser("clean", help="delete junk (dry run unless --yes)")
     c.add_argument("--only", metavar="IDS", help="comma-separated target ids")
     c.add_argument("--yes", action="store_true", help="actually delete")
+    c.add_argument("--all", action="store_true",
+                   help="include opt-in targets (Recycle Bin/Trash, package caches, shader caches)")
     c.add_argument("--snapshot", action="store_true", help="take a restore point/snapshot first, abort if it fails")
     c.add_argument("--json", action="store_true")
     c.set_defaults(fn=cmd_clean)
@@ -241,6 +308,11 @@ def parser() -> argparse.ArgumentParser:
     re_ = sub.add_parser("restore", help="put a leftovers backup back")
     re_.add_argument("backup", help="a folder printed by `cleam leftovers --remove`")
     re_.set_defaults(fn=cmd_restore)
+
+    se = sub.add_parser("security", help="protection status, startup programs, signs of ransomware (changes nothing)")
+    se.add_argument("--scan", action="store_true", help="also run a Microsoft Defender quick scan")
+    se.add_argument("--json", action="store_true")
+    se.set_defaults(fn=cmd_security)
 
     sn = sub.add_parser("snapshot", help="create or list restore points/snapshots")
     sn.add_argument("action", choices=("create", "list"))

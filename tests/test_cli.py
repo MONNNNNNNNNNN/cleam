@@ -50,6 +50,17 @@ class Clean(unittest.TestCase):
         _, out = self.run_cli("scan", "--json")
         self.assertEqual(json.loads(out)[0]["bytes"], 100)
 
+    def test_bare_clean_leaves_opt_in_targets_alone(self):
+        bin_ = Path(tempfile.mkdtemp())
+        (bin_ / "deleted.docx").write_bytes(b"x")
+        both = [junk.Target("t", "test", (self.root,)),
+                junk.Target("bin", "bin", (bin_,), mode="entries", min_age_hours=0, opt_in=True)]
+        with mock.patch.object(junk, "targets", return_value=both):
+            self.run_cli("clean", "--yes")
+            self.assertTrue((bin_ / "deleted.docx").exists())
+            self.run_cli("clean", "--yes", "--only", "bin")
+            self.assertFalse((bin_ / "deleted.docx").exists())
+
     def test_unknown_target_is_rejected(self):
         with self.assertRaises(SystemExit):
             cli.main(["scan", "--only", "nope"])

@@ -17,9 +17,11 @@ Or, without installing: `PYTHONPATH=src python -m cleam --help`.
 
 ![The Overview tab](docs/screenshot-overview.png)
 
-Four tabs: **Overview** (OS and build, disk usage, where the space went),
-**Clean** (scan, tick what to remove, optional snapshot first), **Programs**
-(filter, uninstall), **Snapshots** (create, list). The window and the command
+Four pages in a side rail: **Overview** (OS and build, a usage ring per disk,
+where the space went), **Clean** (the total that can be freed, targets grouped
+into System / Browsers / Apps / Developer tools / Recycle Bin with a checkbox
+per group, optional restore point first), **Programs** (search, uninstall),
+**Snapshots** (create, list). The window and the command
 line call the same core, so they can never disagree about what a clean would
 delete.
 
@@ -44,9 +46,10 @@ Interface rules, all of them there because breaking one hurt in testing
 cleam overview                    # OS and build, disk usage, the big folders
 cleam biggest ~/.cache --top 5    # where the space actually went, under any path
 
+cleam targets                     # every target on this machine, and what deleting it costs
 cleam scan                        # what would be cleaned, per target (read-only)
 cleam clean                       # same report; a dry run — deletes nothing
-cleam clean --yes                 # delete
+cleam clean --yes                 # delete (opt-in targets need --only or --all)
 cleam clean --yes --snapshot      # take a restore point/snapshot first, abort if it fails
 cleam clean --yes --only tmp,trash
 
@@ -56,6 +59,9 @@ cleam uninstall <id> [--snapshot] # runs the program's own uninstaller, asks fir
 cleam leftovers "Some App"                  # what its uninstaller left behind
 cleam leftovers "Some App" --remove         # move those to a backup and remove them
 cleam restore ~/.local/share/cleam/backups/Some-App-20260918-153000
+
+cleam security                    # antivirus, ransomware signs, startup programs (read-only)
+cleam security --scan             # plus a Defender quick scan
 
 cleam snapshot create --description "before driver update"
 cleam snapshot list
@@ -90,17 +96,50 @@ rather than reporting a false 0 B.
 
 ## What gets cleaned
 
-| Target | Windows | Linux | macOS |
+`cleam targets` prints the full list for the machine it runs on, with a line on
+what each one is and what deleting it costs. In the window they are grouped:
+
+| Group | Windows | Linux | macOS |
 |---|---|---|---|
-| Temp files, untouched for 24h | `%TEMP%`, `%SystemRoot%\Temp` | `/tmp` | `$TMPDIR` |
-| App caches, untouched for 7 days | Chrome/Edge/Firefox caches | `~/.cache` | `~/Library/Caches` |
-| Trash | Recycle Bin (every drive) | `~/.local/share/Trash` | `~/.Trash` |
-| Other | Windows Update downloads, crash dumps | apt's downloaded `.deb`s | App logs older than 7 days |
+| System | old driver versions* and Windows upgrade leftovers* (through Disk Cleanup's own handlers), `%TEMP%`, `%SystemRoot%\Temp`, Windows Update and Delivery Optimization downloads, crash dumps, Windows Error Reporting, minidumps and service crash dumps, `Windows\Logs` older than 7 days, NVIDIA driver update files, GPU and Unreal Engine shader caches* | `/tmp`, apt's `.deb`s, rotated `/var/log` copies, crash reports | `$TMPDIR`, app logs older than 7 days |
+| Browsers | Chrome, Edge, Brave, Vivaldi, Opera, Firefox, Zen, LibreWolf, Floorp, Waterfox — every profile | in `~/.cache` | in `~/Library/Caches` |
+| Apps | Electron app caches (Discord, VS Code, Slack…), Steam's web cache, app update downloads (`*-updater`, PowerToys), Unreal Engine game crash reports and logs | `~/.cache`, thumbnails | `~/Library/Caches` |
+| Developer tools | VS Code/Cursor leftovers and unfinished extension installs (also on Remote-SSH servers); JetBrains remote client*, npm*, npx*, pip*, uv*, Yarn*, Go*, pub* caches | same | same, plus Xcode DerivedData |
+| Recycle Bin* | every drive | `~/.local/share/Trash` | `~/.Trash` |
+
+\* never pre-ticked. Emptying the bin is permanent; package caches cost a
+re-download on the next install; shader caches cost a stutter on the next game
+launch.
 
 App caches are removed whole or not at all: a cache with any file modified in
 the last 7 days is left alone, because deleting part of a structured cache
 (uv, prisma) corrupts it. Playwright browsers and ML model caches are always
-kept.
+kept. Package-manager caches are cleared by the package manager itself
+(`npm cache clean --force`, `pip cache purge`, …), which is the one thing that
+knows which files belong together; what it freed is measured, not assumed.
+
+## Security
+
+`cleam security` (and the Security page) answers "is anything protecting this
+PC, and has something already got in?" It changes nothing:
+
+- **Protection:** the active antivirus and whether its definitions are
+  current, Microsoft Defender's real-time state (and whether a policy turned
+  it off), Controlled Folder Access (Windows' ransomware shield), restore
+  points, the firewall per network profile, and UAC. Each problem comes with
+  how to fix it.
+- **Signs of ransomware:** ransom notes, known encrypted-file extensions and
+  mass-renamed documents in Desktop, Documents, Downloads, Pictures, Videos,
+  Music and OneDrive. Names only; no file is opened.
+- **Startup programs:** everything that starts with the computer, oddest
+  first: missing programs, programs in Temp or Downloads, script hosts,
+  encoded PowerShell, unsigned or tampered signatures.
+- `cleam security --scan` runs a Microsoft Defender quick scan when Defender
+  is the active antivirus. Removing a threat is the antivirus's job, not
+  Cleam's.
+
+Cleam is not an antivirus. It exits 1 when protection is missing or ransomware
+signs are found, so it works in a scheduled task.
 
 ## Leftovers
 
