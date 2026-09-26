@@ -4,6 +4,19 @@ Clean junk files, uninstall programs, and take a restore point or snapshot
 first — on Windows, Linux and macOS. See [docs/platforms.md](docs/platforms.md)
 for what each OS allows, including why Android and iOS can only get a subset.
 
+## Run it without installing (Windows)
+
+One line in PowerShell, nothing to install, no Python needed:
+
+```powershell
+irm https://raw.githubusercontent.com/MONNNNNNNNNNN/cleam/main/run.ps1 | iex
+```
+
+It downloads the window from the latest release into
+`%LOCALAPPDATA%\Cleam\portable`, checks it against the SHA-256 GitHub
+publishes, and starts it. Later runs only download when there is a newer
+release. Use an elevated PowerShell to include the system targets.
+
 ## Install
 
 ```sh
