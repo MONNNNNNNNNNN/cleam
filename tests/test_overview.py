@@ -122,6 +122,26 @@ class Biggest(unittest.TestCase):
         self.assertEqual([f.label for f in found], ["large", "medium"])
         self.assertEqual(found[0].bytes, 5000)
 
+    def test_top_level_files_are_sized(self):
+        # pagefile.sys sits directly in C:\ and was reported as 0 B.
+        root = Path(tempfile.mkdtemp())
+        (root / "pagefile.sys").write_bytes(b"x" * 700)
+        (root / "d").mkdir()
+        (root / "d" / "f").write_bytes(b"x" * 10)
+        found = overview.biggest(root)
+        self.assertEqual([(f.label, f.bytes) for f in found], [("pagefile.sys", 700), ("d", 10)])
+
+    def test_links_to_other_folders_are_not_counted_again(self):
+        # C:\Documents and Settings is a junction to C:\Users.
+        root = Path(tempfile.mkdtemp())
+        (root / "Users").mkdir()
+        (root / "Users" / "f").write_bytes(b"x" * 100)
+        try:
+            os.symlink(root / "Users", root / "Documents and Settings", target_is_directory=True)
+        except OSError:
+            self.skipTest("symlinks not permitted here")
+        self.assertEqual([f.label for f in overview.biggest(root)], ["Users"])
+
     def test_a_useless_top_still_returns_the_biggest(self):
         root = Path(tempfile.mkdtemp())
         (root / "a").mkdir()

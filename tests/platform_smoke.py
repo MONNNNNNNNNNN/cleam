@@ -177,6 +177,9 @@ def smoke_platform_facts() -> None:
         "linux": {"tmp", "trash"},
     }[OS]
     check(f"{OS} targets present", expected <= ids, f"missing {expected - ids}" if not expected <= ids else "")
+    listed = json.loads(subprocess.run([*CLEAM, "targets", "--json"], capture_output=True, text=True).stdout)
+    check("`cleam targets` lists what scan scans", {t["id"] for t in listed} == ids)
+    check("every target explains itself", all(t["about"] and t["group"] for t in listed))
 
 
 if __name__ == "__main__":

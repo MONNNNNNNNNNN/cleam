@@ -139,3 +139,24 @@ shrinks instead. Both panels re-verified at 1100×900 light and 700×620 dark.
 This is the argument for driving the real window rather than reading the
 diff: the grey block produced no exception and no console error, so only a
 screenshot could catch it.
+
+## Results — redesign pass (2026-09-26, Windows 10 desktop)
+
+Rail navigation, grouped Clean page, 19 targets on this machine. Driven with
+Claude in Chrome against Flet's web mode.
+
+| ID | Result | Verified by |
+|---|---|---|
+| TC1 | PASS | Screenshot: Overview shows OS line, six disk rings and unmeasured folders; nothing walked |
+| TC3 | PASS | Screenshot: "Not scanned yet", "Clean selected" disabled, every row "not scanned yet" |
+| TC4 | PASS | Screenshot: each row has its name, a one-line "what it is / what it costs", file count and size |
+| TC5 | PASS (unit + screen) | Opt-in rows (Recycle Bin, package caches, shader caches) unticked after scan |
+| TC12 | PASS | Screenshot: 74 programs listed with search field and initials |
+| TC18 | PASS | Screenshots in dark and light (rail toggle) |
+| TC19 | PASS (code) | Row and section checkboxes carry their own labels |
+| TC22 | PASS (code) | `_worker` now claims the panel before starting its thread |
+| New: section checkbox | PASS | Unticking Browsers dropped the selection 6.8 → 5.8 GiB; ticking restored it |
+| New: scan progress | PASS | "Scanning npx packages… (18 of 19)" with a determinate bar; "Checked 19 places in 10 s" |
+| TC17 | **not run** | The browser window was maximized and ignored the resize |
+| Scrolling | **not run** | Wheel and keys do not reach the Flutter canvas through the tool; a bare Flet probe fails the same way, so this is the harness, not Cleam |
+| Delete / Cancel dialog | **not run** | Deleting was not permitted in this session |
