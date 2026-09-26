@@ -116,10 +116,14 @@ jobs:
             name=$(basename "$dir" | tr '[:upper:]' '[:lower:]')
             for f in "$dir"*; do
               base=$(basename "$f")
-              if [ "$name" = cleam-installer ]; then cp "$f" "release/$base"; continue; fi
-              ext=""
-              case "$base" in *.exe) ext=.exe ;; *.zip) ext=.zip ;; esac
-              cp "$f" "release/$name$ext"
+              # flet pack on Linux also writes cleam-gui.desktop, whose Exec=
+              # is a path on the CI runner. v0.1.0 shipped it in place of the
+              # program: both mapped to the same extensionless name.
+              case "$base" in *.desktop) continue ;; esac
+              if [ "$name" = cleam-installer ]; then target="$base"
+              else suffix="${base#cleam-gui}"; suffix="${suffix#cleam}"; target="$name$suffix"; fi
+              if [ -e "release/$target" ]; then echo "two files would both be release/$target"; exit 1; fi
+              cp "$f" "release/$target"
             done
           done
           ls -la release
