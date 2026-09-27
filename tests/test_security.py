@@ -152,7 +152,7 @@ class Judge(unittest.TestCase):
         self.assertIn("script host", self.reasons(r"wscript.exe C:\Users\u\a.vbs"))
         self.assertIn("encoded PowerShell", self.reasons("powershell -w hidden -enc SQBFAFgA"))
         self.assertIn("DLL", self.reasons(r"rundll32.exe C:\Users\u\AppData\Local\x.dll,Run"))
-        self.assertIn("HashMismatch", self.reasons(sys.executable, signed="HashMismatch"))
+        self.assertIn("HashMismatch", self.reasons(r"C:\Tools\patched.exe", signed="HashMismatch"))
 
     def test_a_program_in_its_own_vendor_folder_is_not_loose(self):
         self.assertNotIn("loose", self.reasons(r"C:\Users\u\AppData\Local\Discord\Update.exe --processStart"))
