@@ -1,6 +1,6 @@
 import unittest
 
-from cleam import tui
+from cleam import security, tui
 
 
 class FakeTerminal:
@@ -13,7 +13,7 @@ class FakeTerminal:
     def draw(self, lines):
         self.frame = lines
 
-    def key(self):
+    def key(self, timeout=None):
         return self.keys.pop(0)
 
 
@@ -164,6 +164,111 @@ class Sync(unittest.TestCase):
         self.assertIn("off", tui.ANSI.sub("", tui.row_line(off, False, 100, 24)))
         off.checked = True
         self.assertIn("turn on", tui.ANSI.sub("", tui.row_line(off, False, 100, 24)))
+
+
+class Hover(unittest.TestCase):
+    """Menu items are drawn from line 2: two lines each (name, about)."""
+
+    ITEMS = [("debloat", "Debloat", "a"), ("clean", "Clean junk", "b"), ("security", "System check", "c")]
+
+    def test_pointing_at_an_item_highlights_it_without_opening_it(self):
+        term = FakeTerminal([tui.Hover(10, 4), tui.ESC])  # line 4: "Clean junk"
+        self.assertIsNone(tui.menu(term, "t", self.ITEMS, []))
+        highlighted = [line for line in term.frame if tui.G.cursor in tui.ANSI.sub("", line)]
+        self.assertTrue(any("Clean junk" in line for line in highlighted), highlighted)
+
+    def test_hovering_the_about_line_counts_and_a_click_opens(self):
+        self.assertEqual(tui.menu(FakeTerminal([tui.Hover(10, 7), tui.ENTER]), "t", self.ITEMS, []), 2)
+        self.assertEqual(tui.menu(FakeTerminal([tui.Click(10, 2)]), "t", self.ITEMS, []), 0)
+        self.assertEqual(tui.menu(FakeTerminal(["2"]), "t", self.ITEMS, []), 1)
+
+    def test_hover_moves_the_checklist_cursor_but_never_ticks(self):
+        r = rows()
+        term = FakeTerminal([tui.Hover(6, 4), tui.ENTER])  # line 4 = "Location"
+        chosen = tui.checklist(term, "t", "", r)
+        self.assertEqual([x.label for x in chosen], ["Advertising ID"])
+        text = [tui.ANSI.sub("", line) for line in term.frame]
+        self.assertTrue(any("Location" in line and tui.G.cursor in line for line in text), text)
+
+
+class FakeLive:
+    def __init__(self):
+        self.calls = []
+
+    def change(self, rows):
+        self.calls.append([(r.label, r.checked) for r in rows])
+        for r in rows:
+            r.was = r.checked
+            r.status = "on" if r.checked else "off"
+
+    def note(self):
+        return ""
+
+    def buttons(self):
+        return [("Back", "back"), ("Recommended", "a")]
+
+    def press(self, action, rows):
+        self.calls.append(action)
+
+
+class Live(unittest.TestCase):
+    def rows(self):
+        return [
+            tui.Row("Privacy", header=True),
+            tui.Row("Telemetry off", checked=True, was=True, status="on", tech=["HKLM\\X  A = 1 REG_DWORD"],
+                    detail="Sends less."),
+            tui.Row("Location off", status="off", tech=["HKLM\\Y  B = 0 REG_DWORD"], detail="No location."),
+        ]
+
+    def test_a_tick_is_applied_at_once_with_no_review(self):
+        live = FakeLive()
+        r = self.rows()
+        self.assertIsNone(tui.checklist(FakeTerminal([tui.DOWN, tui.SPACE, tui.ESC]), "t", "", r, live=live))
+        self.assertEqual(live.calls, [[("Location off", True)]])
+        self.assertTrue(r[2].was)
+
+    def test_enter_and_click_switch_too(self):
+        live = FakeLive()
+        tui.checklist(FakeTerminal([tui.ENTER, tui.Click(6, 4), tui.ESC]), "t", "", self.rows(), live=live)
+        self.assertEqual(live.calls, [[("Telemetry off", False)], [("Location off", True)]])
+
+    def test_panel_is_technical_and_question_mark_gives_plain_words(self):
+        term = FakeTerminal([tui.ESC])
+        tui.checklist(term, "t", "", self.rows(), live=FakeLive())
+        text = [tui.ANSI.sub("", line) for line in term.frame]
+        self.assertTrue(any("A = 1 REG_DWORD" in line for line in text))
+        self.assertFalse(any("Sends less." in line for line in text))
+        term = FakeTerminal(["?", tui.ESC])
+        tui.checklist(term, "t", "", self.rows(), live=FakeLive())
+        text = [tui.ANSI.sub("", line) for line in term.frame]
+        self.assertTrue(any("Sends less." in line for line in text))
+
+
+class SystemCheck(unittest.TestCase):
+    def test_topics_with_an_alert_start_open_and_list_it_first(self):
+        checks = [security.Check("a", "Firewall", security.OK, "On", group="Protection"),
+                  security.Check("b", "Antivirus", security.BAD, "None", "Turn Defender on", group="Protection"),
+                  security.Check("c", "Disks", security.OK, "Healthy", group="Health")]
+        topics = tui.check_topics(checks, [], security.RansomReport())
+        protection = topics[0]
+        self.assertTrue(protection.open)
+        self.assertEqual(protection.items[0][1], "Antivirus")
+        self.assertFalse(next(t for t in topics if t.title == "Health").open)
+
+    def test_alert_badge_is_a_word_not_only_a_colour(self):
+        self.assertIn("ALERT", tui.ANSI.sub("", tui.badge(security.BAD)))
+        self.assertIn("CHECK", tui.ANSI.sub("", tui.badge(security.WARN)))
+        widths = {len(tui.ANSI.sub("", tui.badge(s))) for s in tui.SEVERITY}
+        self.assertEqual(len(widths), 1, widths)
+
+
+class ReadAhead(unittest.TestCase):
+    def test_a_background_read_hands_over_its_result_or_its_error(self):
+        bg = tui.Background({"ok": lambda: 42, "bad": lambda: 1 / 0})
+        self.assertEqual(bg.get(FakeTerminal([]), "ok", "t", "reading"), 42)
+        with self.assertRaises(ZeroDivisionError):
+            bg.get(FakeTerminal([]), "bad", "t", "reading")
+        self.assertTrue(bg.ready("ok"))
 
 
 class Clip(unittest.TestCase):

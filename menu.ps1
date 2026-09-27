@@ -17,8 +17,14 @@
 
     function Get-Exe([string]$tag) { Join-Path $dir "cleam-$tag.exe" }
     $have = if (Test-Path $stamp) { (Get-Content $stamp -Raw).Trim() } else { '' }
+    # Asking GitHub for the newest release costs 1-2 s in Windows PowerShell,
+    # so a copy that was checked in the last 6 hours starts straight away.
+    $fresh = $have -and (Test-Path (Get-Exe $have)) -and
+        ((Get-Date) - (Get-Item $stamp).LastWriteTime).TotalHours -lt 6
+    if ($fresh) { & (Get-Exe $have) menu; return }
+    Write-Host "Checking for the newest Cleam..."
     try {
-        $release = Invoke-RestMethod "https://api.github.com/repos/$repo/releases/latest" -Headers @{ 'User-Agent' = 'cleam-menu' }
+        $release = Invoke-RestMethod "https://api.github.com/repos/$repo/releases/latest" -TimeoutSec 5 -Headers @{ 'User-Agent' = 'cleam-menu' }
         $asset = $release.assets | Where-Object { $_.name -eq $file } | Select-Object -First 1
         if (-not $asset) { throw "release $($release.tag_name) has no $file" }
         $exe = Get-Exe $release.tag_name

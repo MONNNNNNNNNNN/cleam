@@ -32,7 +32,8 @@ from pathlib import Path
 from .system import NO_WINDOW, OS
 
 OK, WARN, BAD, UNKNOWN, INFO = "ok", "warn", "bad", "unknown", "info"
-CHECK_GROUPS = ("Protection", "Updates", "Hardware security", "Network exposure", "Health", "Gaming")
+CHECK_GROUPS = ("Protection", "Updates", "Hardware security", "Network exposure", "Health", "CPU & mainboard",
+                "Memory", "Graphics & display", "Storage", "Gaming")
 WIN10_ESU_END = (2027, 10, 12)  # Microsoft: consumer ESU "through October 12, 2027"
 
 
@@ -44,6 +45,7 @@ class Check:
     detail: str
     fix: str = ""
     group: str = "Protection"
+    data: dict = field(default_factory=dict)  # facts a repair needs (device ids, blocking values)
 
 
 def _powershell(script: str, timeout: int = 60) -> str:
@@ -116,8 +118,47 @@ try { $r.disks = @(Get-PhysicalDisk -ErrorAction Stop | ForEach-Object {
 $since = (Get-Date).AddDays(-30)
 try { $r.crashes = @(Get-WinEvent -FilterHashtable @{ LogName = 'System'; Id = 41, 1001, 6008; StartTime = $since } -ErrorAction Stop |
   Group-Object Id | ForEach-Object { [ordered]@{ id = [int]$_.Name; count = $_.Count } }) } catch { $r.crashes = @() }
-try { $r.bad_devices = @(Get-PnpDevice -PresentOnly -Status ERROR -ErrorAction Stop | ForEach-Object { "$($_.FriendlyName)" } | Where-Object { $_ }) } catch { $r.bad_devices = $null }
+try { $r.bad_devices = @(Get-PnpDevice -PresentOnly -Status ERROR -ErrorAction Stop | ForEach-Object {
+  $code = (Get-PnpDeviceProperty -InstanceId $_.InstanceId -KeyName DEVPKEY_Device_ProblemCode -ErrorAction SilentlyContinue).Data
+  [ordered]@{ name = "$($_.FriendlyName)"; id = "$($_.InstanceId)"; code = [int]$code } }) } catch { $r.bad_devices = $null }
 $r.uptime_h = [int]((Get-Date) - (Get-CimInstance Win32_OperatingSystem).LastBootUpTime).TotalHours
+# --- what blocks updates and protection (tweak tools set these; they survive their own "undo")
+function Start-Type($n) { $v = (Get-ItemProperty "HKLM:\SYSTEM\CurrentControlSet\Services\$n" -ErrorAction SilentlyContinue).Start; if ($null -eq $v) { -1 } else { [int]$v } }
+$r.services = [ordered]@{}
+foreach ($n in 'wuauserv','UsoSvc','WaaSMedicSvc','BITS','DoSvc','WinDefend','WdNisSvc','SecurityHealthService','wscsvc','mpssvc') { $r.services[$n] = Start-Type $n }
+$wu = Get-ItemProperty 'HKLM:\SOFTWARE\Policies\Microsoft\Windows\WindowsUpdate' -ErrorAction SilentlyContinue
+$au = Get-ItemProperty 'HKLM:\SOFTWARE\Policies\Microsoft\Windows\WindowsUpdate\AU' -ErrorAction SilentlyContinue
+$r.wu_policy = [ordered]@{ DisableWindowsUpdateAccess = $wu.DisableWindowsUpdateAccess; SetDisableUXWUAccess = $wu.SetDisableUXWUAccess;
+  DoNotConnectToWindowsUpdateInternetLocations = $wu.DoNotConnectToWindowsUpdateInternetLocations; WUServer = $wu.WUServer;
+  WUStatusServer = $wu.WUStatusServer; UpdateServiceUrlAlternate = $wu.UpdateServiceUrlAlternate;
+  UseWUServer = $au.UseWUServer; NoAutoUpdate = $au.NoAutoUpdate }
+$ss = Get-ItemProperty 'HKLM:\SOFTWARE\Policies\Microsoft\Windows\System' -ErrorAction SilentlyContinue
+$r.smartscreen = [ordered]@{ policy = $ss.EnableSmartScreen;
+  explorer = (Get-ItemProperty 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Explorer' -ErrorAction SilentlyContinue).SmartScreenEnabled }
+$rt = Get-ItemProperty "$pol\Real-Time Protection" -ErrorAction SilentlyContinue
+$dp = Get-ItemProperty $pol -ErrorAction SilentlyContinue
+$r.defender_policy = @(foreach ($n in 'DisableAntiSpyware','DisableAntiVirus') { if ($null -ne $dp.$n) { $n } }) +
+  @(foreach ($n in 'DisableRealtimeMonitoring','DisableBehaviorMonitoring','DisableOnAccessProtection','DisableScanOnRealtimeEnable','DisableIOAVProtection') { if ($null -ne $rt.$n) { "Real-Time Protection\$n" } })
+# --- gaming hardware: CPU, memory, graphics, storage, board
+$r.ram = @(Get-CimInstance Win32_PhysicalMemory -ErrorAction SilentlyContinue | ForEach-Object { [ordered]@{
+  rated = [int]$_.Speed; configured = [int]$_.ConfiguredClockSpeed; gb = [int]($_.Capacity / 1GB);
+  type = [int]$_.SMBIOSMemoryType; bank = "$($_.BankLabel)" } })
+$r.gpus = @(Get-CimInstance Win32_VideoController -ErrorAction SilentlyContinue | ForEach-Object { [ordered]@{
+  name = "$($_.Name)"; driver = "$($_.DriverVersion)"; date = if ($_.DriverDate) { $_.DriverDate.ToString('yyyy-MM-dd') } else { $null } } })
+$c = Get-CimInstance Win32_Processor -ErrorAction SilentlyContinue | Select-Object -First 1
+$r.cpu = [ordered]@{ name = "$($c.Name)".Trim(); cores = [int]$c.NumberOfCores; threads = [int]$c.NumberOfLogicalProcessors }
+$bi = Get-CimInstance Win32_BIOS -ErrorAction SilentlyContinue; $bb = Get-CimInstance Win32_BaseBoard -ErrorAction SilentlyContinue
+$r.board = [ordered]@{ maker = "$($bb.Manufacturer)"; product = "$($bb.Product)"; bios = "$($bi.SMBIOSBIOSVersion)";
+  bios_date = if ($bi.ReleaseDate) { $bi.ReleaseDate.ToString('yyyy-MM-dd') } else { $null } }
+$cs = Get-CimInstance Win32_ComputerSystem -ErrorAction SilentlyContinue
+$r.pagefile = [ordered]@{ auto = [bool]$cs.AutomaticManagedPagefile; files = @(Get-CimInstance Win32_PageFileUsage -ErrorAction SilentlyContinue).Count }
+$r.volumes = @(Get-Volume -ErrorAction SilentlyContinue | Where-Object { $_.DriveType -eq 'Fixed' -and $_.DriveLetter -and $_.Size -gt 0 } |
+  ForEach-Object { [ordered]@{ letter = "$($_.DriveLetter)"; size = [int64]$_.Size; free = [int64]$_.SizeRemaining } })
+$r.trim = ((fsutil behavior query DisableDeleteNotify) -join "`n")
+$t = Get-ScheduledTask -TaskPath '\Microsoft\Windows\Defrag\' -TaskName ScheduledDefrag -ErrorAction SilentlyContinue
+$r.optimize_task = if ($t) { [int]$t.State } else { -1 }
+$r.bcd = ((bcdedit /enum '{current}') -join "`n")
+$r.throttle = ((powercfg /query SCHEME_CURRENT SUB_PROCESSOR PROCTHROTTLEMAX) -join "`n")
 # --- gaming
 $gb = Get-ItemProperty 'HKCU:\Software\Microsoft\GameBar' -ErrorAction SilentlyContinue
 $r.game_mode = if ($gb -and $null -ne $gb.AutoGameModeEnabled) { [int]$gb.AutoGameModeEnabled } else { 1 }
@@ -136,6 +177,81 @@ def av_state(product_state: int) -> tuple[bool, bool]:
     return bool((product_state >> 12) & 1), bool(product_state & 0x10)
 
 
+DEFENDER_SERVICES = ("WinDefend", "WdNisSvc", "SecurityHealthService", "wscsvc")
+UPDATE_SERVICES = ("wuauserv", "UsoSvc", "WaaSMedicSvc", "BITS", "DoSvc")
+SERVICE_NAMES = {"wuauserv": "Windows Update service", "UsoSvc": "Update Orchestrator",
+                 "WaaSMedicSvc": "Update Medic (repairs Windows Update)", "BITS": "BITS (background downloads)",
+                 "DoSvc": "Delivery Optimization (update downloads)"}
+POLICY_WORDS = {
+    "DisableWindowsUpdateAccess": "a policy hides and blocks Windows Update",
+    "SetDisableUXWUAccess": "a policy removes the Windows Update page",
+    "NoAutoUpdate": "a policy turns automatic updates off",
+    "DoNotConnectToWindowsUpdateInternetLocations": "a policy forbids contacting Microsoft's update servers",
+    "WUServer": "updates are pointed at an update server that does not exist",
+}
+# Device Manager problem codes worth naming (cfgmgr32.h CM_PROB_*).
+PROBLEM_CODES = {22: "disabled", 28: "no driver installed", 10: "cannot start", 43: "stopped after an error",
+                 31: "driver failed to load", 45: "not connected", 3: "driver may be corrupted"}
+
+
+def update_blocks(raw: dict) -> dict:
+    """What keeps Windows Update from working: disabled services and blocking policies. Pure.
+
+    A WSUS server is only called fake when its name does not resolve: a
+    company's real update server is not Cleam's to remove.
+    """
+    services = raw.get("services") or {}
+    policy = raw.get("wu_policy") or {}
+    found = [n for n in ("DisableWindowsUpdateAccess", "SetDisableUXWUAccess", "NoAutoUpdate") if policy.get(n) == 1]
+    fake_wsus = bool(policy.get("UseWUServer") == 1 and policy.get("WUServer") and raw.get("wsus_resolves") is False)
+    if fake_wsus:
+        found.append("WUServer")
+    if policy.get("DoNotConnectToWindowsUpdateInternetLocations") == 1 and (fake_wsus or not policy.get("WUServer")):
+        found.append("DoNotConnectToWindowsUpdateInternetLocations")
+    return {"services": [n for n in UPDATE_SERVICES if services.get(n) == 4], "policy": found,
+            "wsus": policy.get("WUServer") if fake_wsus else ""}
+
+
+# Addresses Windows Update, Defender and SmartScreen use; a hosts line
+# sending one of them to 0.0.0.0 cuts that off silently.
+MS_SECURITY_HOSTS = ("windowsupdate.com", "update.microsoft.com", "delivery.mp.microsoft.com", "dsp.mp.microsoft.com",
+                     "wdcp.microsoft.com", "wdcpalt.microsoft.com", "definitionupdates.microsoft.com",
+                     "smartscreen.microsoft.com", "smartscreen-prod.microsoft.com", "checkappexec.microsoft.com",
+                     "urs.microsoft.com", "windowsupdate.microsoft.com")
+
+
+def hosts_blocks(text: str) -> list[str]:
+    """Hostnames in a hosts file that send a Microsoft update/security address somewhere else."""
+    out = []
+    for line in text.splitlines():
+        parts = line.split("#", 1)[0].split()
+        for name in parts[1:]:
+            low = name.lower().rstrip(".")
+            if any(low == h or low.endswith("." + h) for h in MS_SECURITY_HOSTS):
+                out.append(low)
+    return out
+
+
+def _resolves(host: str, seconds: float = 2.0) -> bool:
+    import socket
+    import threading
+
+    name = host.split("://")[-1].split("/")[0].split(":")[0]
+    result: list[bool] = []
+
+    def look() -> None:
+        try:
+            socket.getaddrinfo(name, None)
+            result.append(True)
+        except OSError:
+            result.append(False)
+
+    t = threading.Thread(target=look, daemon=True)
+    t.start()
+    t.join(seconds)
+    return bool(result and result[0])
+
+
 def windows_checks(raw: dict, today=None) -> list[Check]:
     """Turn the raw status into checks. Pure, so every branch is testable off Windows."""
     checks: list[Check] = []
@@ -152,12 +268,15 @@ def windows_checks(raw: dict, today=None) -> list[Check]:
         checks.append(Check("antivirus", "Antivirus", OK, "Microsoft Defender is on."))
     else:
         why = "Microsoft Defender is turned off by a policy" if raw.get("policy_off") else "Microsoft Defender is off"
+        services = raw.get("services") or {}
         checks.append(Check(
             "antivirus", "Antivirus", BAD,
             f"No antivirus is protecting this PC. {why} (service: {raw.get('defender_service', 'unknown')}).",
             "Turn Defender back on: remove DisableAntiSpyware and the Real-Time Protection values under"
             " HKLM\\SOFTWARE\\Policies\\Microsoft\\Windows Defender (or undo the tweak tool that set them),"
             " set the WinDefend service to Automatic and restart. Or install and enable another antivirus.",
+            data={"policy": _as_list(raw.get("defender_policy")),
+                  "services": [n for n in DEFENDER_SERVICES if services.get(n) == 4]},
         ))
     if defender:
         age = defender.get("signature_age")
@@ -192,12 +311,29 @@ def windows_checks(raw: dict, today=None) -> list[Check]:
         checks.append(Check("firewall", "Firewall", BAD if off else OK,
                             f"Off for: {', '.join(off)}." if off else "On for every network profile.",
                             "Windows Security > Firewall & network protection." if off else ""))
+    smart = raw.get("smartscreen") or {}
+    if smart:
+        off = smart.get("policy") == 0 or str(smart.get("explorer") or "").lower() == "off"
+        checks.append(Check(
+            "smartscreen", "SmartScreen", WARN if off else OK,
+            "Off: downloaded programs and unknown apps start without Windows checking their reputation."
+            if off else "On.",
+            "Turn SmartScreen back on." if off else "", data=dict(smart) if off else {}))
+    blocked = _as_list(raw.get("hosts_blocked"))
+    if blocked:
+        checks.append(Check(
+            "hosts", "Hosts file", BAD,
+            f"Blocks {len(blocked)} Microsoft update or security address(es), e.g. {blocked[0]}: updates, "
+            "virus definitions or SmartScreen cannot reach Microsoft.",
+            "Remove those lines from C:\\Windows\\System32\\drivers\\etc\\hosts.", data={"hosts": blocked}))
     uac = raw.get("uac")
     if uac is not None:
         checks.append(Check("uac", "User Account Control", OK if uac == 1 else BAD,
                             "On." if uac == 1 else "Off: every program runs with full rights, unasked.",
                             "" if uac == 1 else "Turn UAC back on (EnableLUA = 1) and restart."))
-    return checks + system_checks(raw, today)
+    from .hardware import hardware_checks  # hardware imports Check from here
+
+    return checks + system_checks(raw, today) + hardware_checks(raw, today)
 
 
 def system_checks(raw: dict, today=None) -> list[Check]:
@@ -211,6 +347,14 @@ def system_checks(raw: dict, today=None) -> list[Check]:
         out.append(Check(*args, group=group, **kw))
 
     # ---- updates
+    blocks = update_blocks(raw)
+    if blocks["services"] or blocks["policy"]:
+        what = [f"{SERVICE_NAMES.get(n, n)} disabled" for n in blocks["services"]]
+        what += [POLICY_WORDS.get(n, n) for n in blocks["policy"]]
+        add("Updates", "update-blocked", "Windows Update is blocked", BAD,
+            "; ".join(what) + ". No security update can install until this is undone -- usually a tweak tool "
+            "did it.", "Unblock it: remove those policies and set the services back to Windows' defaults.",
+            data=blocks)
     build = raw.get("build") or 0
     last = raw.get("last_update")
     if last:
@@ -294,12 +438,15 @@ def system_checks(raw: dict, today=None) -> list[Check]:
     add("Health", "crashes", "Crashes (30 days)", WARN if bsod or power else OK,
         f"{bsod} blue screen(s), {power} unexpected shutdown(s)." if bsod or power else "None.",
         "Look for a pattern: a new driver, overheating, unstable overclock or power supply." if bsod or power else "")
-    bad = _as_list(raw.get("bad_devices"))
+    bad = [d if isinstance(d, dict) else {"name": str(d), "id": "", "code": 0}
+           for d in _as_list(raw.get("bad_devices"))]
     if raw.get("bad_devices") is not None:
+        names = [f"{d.get('name') or d.get('id')} ({PROBLEM_CODES.get(d.get('code'), 'code ' + str(d.get('code')))})"
+                 for d in bad]
         add("Health", "devices", "Devices", WARN if bad else OK,
-            f"Reporting a problem: {', '.join(bad)}." if bad else "No device reports a problem.",
-            "Device Manager: update or reinstall the driver; a device switched off by a tweak shows here too."
-            if bad else "")
+            f"Reporting a problem: {', '.join(names)}." if bad else "No device reports a problem.",
+            "A disabled device can be switched back on here; others need their driver reinstalled." if bad else "",
+            data={"devices": bad})
     uptime = raw.get("uptime_h")
     if isinstance(uptime, int) and uptime >= 168:
         add("Health", "uptime", "Uptime", INFO, f"{uptime // 24} days since the last restart.",
@@ -330,6 +477,17 @@ def status() -> list[Check]:
             raw = None
         if not isinstance(raw, dict):
             return [Check("antivirus", "Antivirus", UNKNOWN, "Windows would not report its protection status.")]
+        server = (raw.get("wu_policy") or {}).get("WUServer")
+        if server:
+            raw["wsus_resolves"] = _resolves(server)
+        try:
+            raw["hosts_blocked"] = hosts_blocks(HOSTS.read_text(encoding="utf-8", errors="replace"))
+        except OSError:
+            pass
+        from . import hardware
+
+        raw["displays"] = hardware.displays()
+        raw["nvidia"] = hardware.nvidia()
         return windows_checks(raw)
     checks = []
     scanner = shutil.which("clamscan")
@@ -341,6 +499,7 @@ def status() -> list[Check]:
 
 # --------------------------------------------------------------- scanning
 
+HOSTS = Path(os.environ.get("SystemRoot", r"C:\Windows")) / "System32" / "drivers" / "etc" / "hosts"
 MPCMDRUN = Path(os.environ.get("ProgramFiles", r"C:\Program Files")) / "Windows Defender" / "MpCmdRun.exe"
 
 
@@ -629,6 +788,28 @@ def _startup_approved(winreg) -> dict[str, bool]:
             except OSError:
                 continue
     return state
+
+
+def set_startup_enabled(item: StartupItem, enabled: bool) -> str:
+    """Task Manager's Startup switch for one entry: a 12-byte StartupApproved value,
+    first byte 2 (on) or 3 (off), then the FILETIME it was switched off. "" on success."""
+    import struct
+    import winreg
+
+    from .repair import approved_key
+
+    where = approved_key(item)
+    if not where:
+        return "this entry has no startup switch"
+    hive = winreg.HKEY_CURRENT_USER if where[0] == "HKCU" else winreg.HKEY_LOCAL_MACHINE
+    stamp = int((time.time() + 11644473600) * 10_000_000)  # Unix time to FILETIME
+    data = struct.pack("<IQ", 2, 0) if enabled else struct.pack("<IQ", 3, stamp)
+    try:
+        with winreg.CreateKeyEx(hive, where[1], 0, winreg.KEY_SET_VALUE | winreg.KEY_WOW64_64KEY) as k:
+            winreg.SetValueEx(k, item.name, 0, winreg.REG_BINARY, data)
+    except OSError as e:
+        return str(e.strerror or e)
+    return ""
 
 
 def _signatures(items: list[StartupItem]) -> None:

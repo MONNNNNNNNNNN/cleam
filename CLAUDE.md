@@ -249,7 +249,7 @@ accepting them safe.
 - Ubuntu cloud images mark base packages (bash, base-files) as manually
   installed; `apps.parse_dpkg` drops required/important/essential ones.
 
-## Security (2026-09-26): checks and explains, never removes
+## Security (2026-09-26): checks and explains (v2 below adds fixes)
 
 Mon asked for malware and ransomware scanning. `security.py` deliberately
 does not scan file contents: a home-made scanner misses what Defender catches
@@ -374,6 +374,103 @@ Mon asked for an ASCII UI with checkboxes and deep Windows debloat.
   (conhost drops arrow events without scan code + ENHANCED_KEY); inject
   KEY_EVENT records with WriteConsoleInputW instead -- they arrive as
   `'\xe0' 'P'` exactly like a keyboard.
+
+## Menu v2 (2026-09-27): live, pre-read, Basic/Advanced
+
+Mon tested v0.1.3's menu and asked for hover, live changes, no waiting,
+dropdown system check, Basic/Advanced, and a deeper catalogue than
+Optimizer 16.7 and Stix Tweaker.
+
+- **The "ticked but unticked after reopen" bug was not a registry bug:**
+  there was no journal at all, i.e. nothing was ever applied -- the old
+  list only applied after a Review step. Plus `device-companion-apps`
+  checked only the policy while Settings writes
+  `HKLM\SOFTWARE\Microsoft\Windows\CurrentVersion\Device Metadata`; both
+  are now in the tweak (it reads PARTLY on Mon's PC until applied).
+- **Live mode** (`checklist(..., live=DebloatLive)`): a tick calls
+  `apply`/`revert` at once, then `engine.state()` reads Windows back and
+  the row shows that ("not kept" when a policy puts it back). App removal
+  keeps one confirm (it deletes the app's data). Undo is live too. Clean
+  junk stays tick-then-confirm: it deletes files.
+- **Pre-read:** `Background` starts daemon-thread `Job`s for debloat, the
+  system check and the junk scan when the menu opens (daemon: quitting never
+  waits); the menu shows "reading..." / "ready" and refreshes itself via
+  `term.key(timeout)` (WaitForSingleObject / select). Debloat updates
+  `data["states"]` in place instead of re-reading. `states()` went from
+  6.8 s to 1.7 s: one `Get-ScheduledTask` for every task instead of one per
+  path, and action probes (DISM, optional features) in parallel threads.
+- **Hover:** Windows MOUSE_MOVED (flags 1) and xterm mode 1003 give `Hover`;
+  `Terminal.draw` skips a frame identical to the last, so mouse moves cost
+  nothing. **Conhost trap:** after writing the last column the cursor is
+  wrap-pending and `ESC[K` erases that column -- every panel's right border
+  was missing; `ESC[K` is now only sent on short lines.
+- **Detail panel:** `debloat.tech(t)` spells out registry path, value and
+  type, service start type (with the default), task, or the action's
+  command (`Action.tech`); `?` switches to the plain `about` text.
+- **Tiers:** `tier()` -- advanced if moderate, in `ADVANCED_GROUPS`, an app
+  that is not default-ticked, or `level=ADVANCED` (app-specific telemetry).
+- **From Optimizer/Stix (read as .NET string tables, never run):** taken --
+  Edge StartupBoost/BackgroundMode policies, LetAppsRunInBackground=2,
+  ExcludeWUDriversInQualityUpdate, WSearch, Xbox Live services (not
+  XboxGipSvc: controller accessories), MenuShowDelay, transparency, Game Bar
+  on the guide button, LLMNR, NoDriveTypeAutoRun/NoAutorun, SMB1Protocol and
+  MicrosoftWindowsPowerShellV2Root (OptionalFeature actions), Remote
+  Assistance, VerboseStatus, CrashControl DisplayParameters, LongPaths,
+  Office SendTelemetry=3, VS SQM OptIn=0, Firefox policies, NVIDIA NvTmRep
+  tasks (absent with the new NVIDIA App), .NET/PowerShell opt-out env vars.
+  Rejected -- Stix disables wuauserv/UsoSvc/BITS/WaaSMedic and sets
+  DisableWindowsUpdateAccess, turns VBS/HVCI off, disables HPET and a dozen
+  system devices, sets DisabledComponents=255 (Microsoft: use 0x20),
+  disables Spooler/SysMain/memory compression, and ships timer/MMCSS/AFD
+  values with no reproducible gain; Chrome's MetricsReportingEnabled only
+  applies on managed (domain/Azure AD/CBCM) Windows machines.
+- **menu.ps1** skips the GitHub API check (1.4 s in Windows PowerShell) when
+  the cached copy was checked in the last 6 hours; the check has a 5 s cap.
+- Verified in a real (minimized) console by injecting MOUSE_EVENT records
+  with WriteConsoleInputW and reading the screen back with
+  ReadConsoleOutputCharacterW -- text, no screenshots.
+
+## System check v2 (2026-09-27): it fixes, and it checks the gaming set-up
+
+Mon asked for the system check to fix, not just display. That reverses the
+2026-09-26 "never changes security settings" stance, at Mon's request; the
+rules now: a fix only runs when clicked (or `cleam security --fix ID --yes`),
+its confirm lists the exact change (`Fix.tech`), registry/service fixes go
+through `Debloater.apply` (journal first, Undo debloat reverses; a Reg with
+`value=None` means "delete this value"), and nothing lowers protection.
+
+- **Found on Mon's desktop, invisible to v1:** Windows Update blocked four
+  ways -- `WUServer=localserver.localdomain.wsus` + `UseWUServer=1` (a fake
+  WSUS), `DisableWindowsUpdateAccess`, `NoAutoUpdate`,
+  `DoNotConnectToWindowsUpdateInternetLocations`, and wuauserv / WaaSMedicSvc
+  / DoSvc Disabled -- which is why the last update was 151 days old. A WSUS
+  server is only called fake when its name does not resolve (a company's real
+  one is not ours to remove). Also: SmartScreen off by policy, TRIM off
+  (`NTFS DisableDeleteNotify = 1`), boot values `tscsyncpolicy Enhanced`,
+  `disabledynamictick Yes` and three APIC/PCI ones, the second monitor at
+  59 Hz though it offers 144 Hz (verified with ChangeDisplaySettingsEx
+  CDS_TEST, not applied), HPET and the Wi-Fi card disabled (problem code 22),
+  D: 4 % free. Fine: EXPO on (DDR5-5600 over rated 4800), dual channel, RTX
+  4070 SUPER at x16 with Resizable BAR (BAR1 16 GiB), driver and BIOS recent.
+- **Parsing without translated labels:** fsutil by `DisableDeleteNotify = N`,
+  bcdedit by value names, powercfg PROCTHROTTLEMAX by the position of its hex
+  values (min, max, increment, AC, DC).
+- **Win32_PhysicalMemory.Speed is the JEDEC/SPD speed**, not the XMP one:
+  configured > rated means XMP/EXPO is on; configured == a JEDEC top speed
+  (DDR4 2666, DDR5 4800) is reported as INFO "if the kit is sold faster".
+- **Monitors:** EnumDisplaySettings over the modes at the current resolution
+  and depth (interlaced excluded), not Win32_VideoController.MaxRefreshRate.
+- **Hosts:** Mon's has 949 lines (Adobe blocks); only Microsoft
+  update/Defender/SmartScreen names count. The fix comments lines out after a
+  one-time `hosts.cleam-backup`.
+- **Startup:** "Turn off at startup" writes Task Manager's own
+  StartupApproved value (03 + FILETIME), so Task Manager can turn it back on.
+- More debloat from this round: VRR for windowed games (VRROptimizeEnable in
+  the shared DirectX string), animations, NTFS last-access
+  (0x80000001, default 0x80000002), Start recommendations / account
+  notifications (Win11), recent files, Edge sidebar + Copilot button
+  policies, Defender PUA blocking, LSA protection as RunAsPPL=2 (1 would add
+  a UEFI lock that cannot be undone from Windows), WDigest pinned off.
 
 ## AI: advisory only, and not built yet
 

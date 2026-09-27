@@ -6,7 +6,7 @@ import json
 import sys
 from dataclasses import asdict
 
-from . import __version__, apps, debloat, junk, leftovers, overview, security, snapshot
+from . import __version__, apps, debloat, junk, leftovers, overview, repair, security, snapshot
 from .system import OS, human
 
 
@@ -205,8 +205,10 @@ SYMBOL = {"ok": "ok  ", "warn": "WARN", "bad": "BAD ", "unknown": "?   "}
 
 
 def cmd_security(args) -> int:
-    """Protection status, startup programs and signs of ransomware. Changes nothing."""
+    """Protection status, startup programs and signs of ransomware. Changes nothing unless --fix."""
     checks = security.status()
+    if args.fix is not None:
+        return _fix(checks, args.fix, args.yes)
     items = security.startup()
     signs = security.ransom_signs()
     if args.json:
@@ -218,6 +220,8 @@ def cmd_security(args) -> int:
             print(f"  {SYMBOL[c.state]} {c.label}: {c.detail}")
             if c.fix:
                 print(f"       -> {c.fix}")
+            for f in repair.fixes_for(c):
+                print(f"       fix: cleam security --fix {c.id}   ({f.title})")
         print(f"\nSigns of ransomware ({signs.files_checked} files in your folders"
               + (", stopped early" if signs.truncated else "") + ")")
         for line in signs.findings() or ["none found"]:
@@ -240,6 +244,33 @@ def cmd_security(args) -> int:
             return code
     bad = any(c.state == "bad" for c in checks) or signs.state == "bad"
     return 1 if bad else 0
+
+
+def _fix(checks, wanted: str, yes: bool) -> int:
+    """List the fixes (no id), or run the ones for one check id."""
+    found = [(c, f) for c in checks for f in repair.fixes_for(c)]
+    if not wanted:
+        for c, f in found:
+            print(f"  {c.id:20} {f.title}  [{f.kind}]")
+        print("\nRun one: cleam security --fix <id> --yes" if found else "Nothing to fix.")
+        return 0
+    chosen = [(c, f) for c, f in found if c.id == wanted]
+    if not chosen:
+        raise SystemExit(f"cleam: no fix for '{wanted}' (see `cleam security --fix`)")
+    failed = 0
+    for c, f in chosen:
+        print(f"{f.title}:")
+        for line in f.tech:
+            print(f"    {line}")
+        if f.warn:
+            print(f"  ! {f.warn}")
+        if not yes:
+            print("  (dry run: add --yes to do it)")
+            continue
+        ok, said = repair.run(f)
+        failed += not ok
+        print(f"  {'OK' if ok else 'FAILED'}: {said}")
+    return 1 if failed else 0
 
 
 def cmd_snapshot(args) -> int:
@@ -323,9 +354,12 @@ def parser() -> argparse.ArgumentParser:
     re_.add_argument("backup", help="a folder printed by `cleam leftovers --remove`")
     re_.set_defaults(fn=cmd_restore)
 
-    se = sub.add_parser("security", help="protection status, startup programs, signs of ransomware (changes nothing)")
+    se = sub.add_parser("security", help="system check: protection, updates, hardware, gaming set-up, startup, ransomware; --fix repairs")
     se.add_argument("--scan", action="store_true", help="also run a Microsoft Defender quick scan")
     se.add_argument("--json", action="store_true")
+    se.add_argument("--fix", nargs="?", const="", metavar="ID",
+                    help="list the fixes, or show (and with --yes run) the fix for one check id")
+    se.add_argument("--yes", action="store_true", help="with --fix: really do it")
     se.set_defaults(fn=cmd_security)
 
     sn = sub.add_parser("snapshot", help="create or list restore points/snapshots")
@@ -361,6 +395,7 @@ def cmd_debloat(args) -> int:
         states = engine.states()
         rows = [{**{k: v for k, v in debloat.as_dict(t).items() if k in ("id", "group", "title", "about", "default",
                                                                            "risk", "restart")},
+                 "level": debloat.tier(t), "tech": debloat.tech(t),
                  "state": states[t.id], "unavailable": debloat.availability(t, engine.env)} for t in debloat.TWEAKS]
         if args.json:
             print(json.dumps({"tweaks": rows, "apps": [{"id": a.id, "name": a.name, "default": a.default}

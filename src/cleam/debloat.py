@@ -46,7 +46,7 @@ class Reg:
     hive: str
     key: str
     name: str
-    value: int | str
+    value: int | str | None  # None: the change is removing this value (a blocking policy)
     kind: int = DWORD
     # Touch this value only when its key already exists: a service's Start
     # value for a service this Windows does not have, an app's settings key.
@@ -85,6 +85,7 @@ class Tweak:
     # A change made by a Windows command rather than a registry value
     # (reserved storage, hibernation): the name of an entry in ACTIONS.
     action: str = ""
+    level: str = ""  # "basic" | "advanced"; "" = decided by tier()
 
 
 @dataclass(frozen=True)
@@ -97,7 +98,21 @@ class App:
 
 
 GROUPS = ("Power & storage", "Privacy", "Ads & suggestions", "Search & Start", "AI & Copilot",
-          "Taskbar & Explorer", "Gaming & comfort", "Services", "Apps")
+          "Taskbar & Explorer", "Gaming & comfort", "Performance", "Security", "Diagnostics", "Services", "Apps")
+
+# Basic is what nobody needs to think about: safe, and only the settings a
+# person sees. Advanced is the rest -- services, power, gaming and security
+# settings, anything rated moderate, and apps that hold data of their own.
+ADVANCED_GROUPS = ("Power & storage", "Gaming & comfort", "Performance", "Security", "Diagnostics", "Services")
+BASIC, ADVANCED = "basic", "advanced"
+
+
+def tier(item: "Tweak | App") -> str:
+    if isinstance(item, App):
+        return BASIC if item.default else ADVANCED
+    if item.level:
+        return item.level
+    return ADVANCED if item.risk == MODERATE or item.group in ADVANCED_GROUPS else BASIC
 
 CDM = r"Software\Microsoft\Windows\CurrentVersion\ContentDeliveryManager"
 ADV = r"Software\Microsoft\Windows\CurrentVersion\Explorer\Advanced"
@@ -197,6 +212,33 @@ TWEAKS: tuple[Tweak, ...] = (
           "No app can read your location. Maps, weather, Find my device and automatic time zone stop working.",
           (Reg(HKLM, r"SOFTWARE\Microsoft\Windows\CurrentVersion\CapabilityAccessManager\ConsentStore\location",
                "Value", "Deny", SZ, original="Allow"),), risk=MODERATE),
+    Tweak("office-telemetry", "Privacy", "Office: send no diagnostic data",
+          "Microsoft 365 / Office 2016+ send neither required nor optional diagnostic data (Office's own "
+          "policy, SendTelemetry = Neither). Office works the same.",
+          (Reg(HKCU, r"Software\Policies\Microsoft\office\common\clienttelemetry", "SendTelemetry", 3),),
+          requires_file=r"%ProgramFiles%\Microsoft Office", level=ADVANCED),
+    Tweak("vs-telemetry", "Privacy", "Visual Studio: leave the improvement program",
+          "Visual Studio's Customer Experience Improvement Program is switched off by policy (SQM OptIn = 0), "
+          "and its feedback prompt is hidden.",
+          (Reg(HKLM, r"SOFTWARE\Policies\Microsoft\VisualStudio\SQM", "OptIn", 0),
+           Reg(HKLM, r"SOFTWARE\Policies\Microsoft\VisualStudio\Feedback", "DisableFeedbackDialog", 1)),
+          requires_file=r"%ProgramFiles%\Microsoft Visual Studio", level=ADVANCED),
+    Tweak("firefox-telemetry", "Privacy", "Firefox: no telemetry or default-browser agent",
+          "Firefox's DisableTelemetry and DisableDefaultBrowserAgent policies. Firefox then says it is "
+          "'managed by your organization' -- that is these policies, nothing else.",
+          (Reg(HKLM, r"SOFTWARE\Policies\Mozilla\Firefox", "DisableTelemetry", 1),
+           Reg(HKLM, r"SOFTWARE\Policies\Mozilla\Firefox", "DisableDefaultBrowserAgent", 1)),
+          requires_file=r"%ProgramFiles%\Mozilla Firefox\firefox.exe", level=ADVANCED),
+    Tweak("nvidia-telemetry", "Privacy", "NVIDIA: stop the crash and telemetry report tasks",
+          "Disables the report tasks GeForce Experience and older NVIDIA drivers schedule. The driver and "
+          "the NVIDIA App are unaffected.",
+          tasks=tuple(rf"\{name}_{{B2FE1952-0186-46C3-BAEC-A80AA35AC5B8}}" for name in (
+              "NvTmRep_CrashReport1", "NvTmRep_CrashReport2", "NvTmRep_CrashReport3", "NvTmRep_CrashReport4",
+              "NvTmMon", "NvTmRep", "NvTmRepOnLogon")), level=ADVANCED),
+    Tweak("cloud-clipboard", "Privacy", "Don't sync the clipboard to other devices",
+          "What you copy stays on this PC instead of going to your Microsoft account (policy "
+          "AllowCrossDeviceClipboard). Clipboard history (Win+V) still works.",
+          (Reg(HKLM, rf"{POL}\System", "AllowCrossDeviceClipboard", 0),), default=True),
     Tweak("error-reporting", "Privacy", "Don't send crash reports",
           "Crashes are no longer reported to Microsoft, so fixes for them come from other people's reports.",
           (Reg(HKLM, r"SOFTWARE\Microsoft\Windows\Windows Error Reporting", "Disabled", 1),), risk=MODERATE),
@@ -206,6 +248,16 @@ TWEAKS: tuple[Tweak, ...] = (
           "Windows stops installing sponsored apps (games, TikTok, Spotify...) without asking.",
           cdm("SilentInstalledAppsEnabled", "PreInstalledAppsEnabled", "OemPreInstalledAppsEnabled"),
           default=True),
+    Tweak("start-recommendations", "Ads & suggestions", "No recommended tips and apps in Start",
+          "Turns off Settings > Personalization > Start > 'Show recommendations for tips, shortcuts, new apps, "
+          "and more'.",
+          (Reg(HKCU, ADV, "Start_IrisRecommendations", 0),), default=True, windows="11", min_build=22621,
+          restart="explorer"),
+    Tweak("start-account-notifications", "Ads & suggestions", "No account notifications in Start",
+          "Turns off the Microsoft account nags (back up your PC, finish setting up OneDrive) on Start's "
+          "profile picture.",
+          (Reg(HKCU, ADV, "Start_AccountNotifications", 0),), default=True, windows="11", min_build=22631,
+          restart="explorer"),
     Tweak("start-suggestions", "Ads & suggestions", "No suggested apps in Start",
           "Removes 'suggestions' (ads for Store apps) from the Start menu.",
           cdm("SubscribedContent-338388Enabled", "SystemPaneSuggestionsEnabled")
@@ -238,7 +290,11 @@ TWEAKS: tuple[Tweak, ...] = (
     Tweak("device-companion-apps", "Ads & suggestions", "No vendor apps when you plug in a device",
           "Windows stops downloading companion apps (mouse, keyboard, printer software) for new devices. "
           "Drivers still install.",
-          (Reg(HKLM, rf"{POL}\Device Metadata", "PreventDeviceMetadataFromNetwork", 1),), default=True),
+          # The policy, and the value Settings > Devices ("Download manufacturers'
+          # apps") writes: another tool setting only the second one read as off.
+          (Reg(HKLM, rf"{POL}\Device Metadata", "PreventDeviceMetadataFromNetwork", 1),
+           Reg(HKLM, r"SOFTWARE\Microsoft\Windows\CurrentVersion\Device Metadata", "PreventDeviceMetadataFromNetwork",
+               1, original=0)), default=True),
     Tweak("consumer-features", "Ads & suggestions", "Turn off Microsoft consumer experiences (policy)",
           "The policy form of the tweaks above. Microsoft documents it for Enterprise and Education only; "
           "Home and Pro ignore it.",
@@ -284,6 +340,11 @@ TWEAKS: tuple[Tweak, ...] = (
           "Copilot app; kept for Windows 11 builds that still have the built-in Copilot.",
           (Reg(HKCU, r"Software\Policies\Microsoft\Windows\WindowsCopilot", "TurnOffWindowsCopilot", 1),),
           default=True, windows="11"),
+    Tweak("edge-copilot", "AI & Copilot", "Edge: no sidebar or Copilot button",
+          "Hides Edge's sidebar with Copilot (HubsSidebarEnabled) and the Copilot button in the toolbar "
+          "(Microsoft365CopilotChatIconEnabled, Edge 141+), through Edge's own policies.",
+          (Reg(HKLM, r"SOFTWARE\Policies\Microsoft\Edge", "HubsSidebarEnabled", 0),
+           Reg(HKLM, r"SOFTWARE\Policies\Microsoft\Edge", "Microsoft365CopilotChatIconEnabled", 0)), default=True),
     Tweak("recall", "AI & Copilot", "Turn off and remove Recall",
           "Stops Recall saving screenshots of your activity and removes the Recall component at the next "
           "restart, deleting its snapshots.",
@@ -313,6 +374,10 @@ TWEAKS: tuple[Tweak, ...] = (
           windows="11"),
 
     # ------------------------------------------------------------ Taskbar & Explorer
+    Tweak("recent-files", "Privacy", "Don't list recently opened files",
+          "Start, Jump Lists and File Explorer's Home stop showing the files you opened last (and stop "
+          "recording them).",
+          (Reg(HKCU, ADV, "Start_TrackDocs", 0),), restart="explorer"),
     Tweak("file-extensions", "Taskbar & Explorer", "Show file extensions",
           "Shows .exe, .pdf, .docx... in File Explorer, so 'invoice.pdf.exe' can no longer pass for a PDF.",
           (Reg(HKCU, ADV, "HideFileExt", 0, original=1),), default=True, restart="explorer"),
@@ -363,6 +428,10 @@ TWEAKS: tuple[Tweak, ...] = (
           "DirectX 10/11 games in windowed or borderless mode use the flip model: lower input latency, and "
           "variable refresh rate and Auto HDR start working (Microsoft). Other graphics settings are kept.",
           action="windowed-games", default=True, windows="11", min_build=22621),
+    Tweak("vrr-windowed", "Gaming & comfort", "Variable refresh rate for windowed games",
+          "Lets G-Sync / FreeSync monitors use variable refresh in DirectX 11 games running windowed or "
+          "borderless, not just full screen (Settings > Display > Graphics). Other graphics settings are kept.",
+          action="vrr-windowed", default=True, windows="10,11", min_build=18362),
     Tweak("hags", "Gaming & comfort", "Hardware-accelerated GPU scheduling",
           "The GPU schedules its own work (Microsoft DirectX). Needs a GPU and driver that support it (NVIDIA "
           "10-series, AMD RX 5000 or newer); DLSS Frame Generation requires it. Results vary by game.",
@@ -388,6 +457,119 @@ TWEAKS: tuple[Tweak, ...] = (
           (Reg(HKCU, r"System\GameConfigStore", "GameDVR_Enabled", 0),
            Reg(HKCU, r"Software\Microsoft\Windows\CurrentVersion\GameDVR", "AppCaptureEnabled", 0),
            Reg(HKLM, rf"{POL}\GameDVR", "AllowGameDVR", 0)), risk=MODERATE),
+    Tweak("game-bar-controller", "Gaming & comfort", "Controller's Xbox button doesn't open Game Bar",
+          "The Xbox (guide) button on a controller stops opening the Game Bar overlay over your game. Win+G "
+          "still opens it.",
+          (Reg(HKCU, r"Software\Microsoft\GameBar", "UseNexusForGameBarEnabled", 0),)),
+
+    # ------------------------------------------------------------ Performance
+    # Researched against Optimizer 16.7 and Stix Tweaker (2026-09-27): kept
+    # only what has a documented effect and a clean way back. Their "disable
+    # Windows Update / VBS / HPET / Spooler / IPv6 / memory compression" and
+    # timer, MMCSS and network-throttle values are left out on purpose.
+    Tweak("background-apps", "Performance", "Store apps don't run in the background",
+          "Microsoft Store apps stop running when you are not using them (Windows policy "
+          "LetAppsRunInBackground = Force Deny): less memory and battery use. Mail, Calendar and Phone Link "
+          "stop updating and notifying until you open them.",
+          (Reg(HKLM, rf"{POL}\AppPrivacy", "LetAppsRunInBackground", 2),), risk=MODERATE),
+    Tweak("edge-background", "Performance", "Edge doesn't stay running after you close it",
+          "Turns off Edge's Startup boost (Edge pre-loaded at sign-in) and background mode (Edge kept running "
+          "after its last window closes), through Edge's own documented policies. Edge opens a moment slower.",
+          (Reg(HKLM, r"SOFTWARE\Policies\Microsoft\Edge", "StartupBoostEnabled", 0),
+           Reg(HKLM, r"SOFTWARE\Policies\Microsoft\Edge", "BackgroundModeEnabled", 0)), default=True),
+    Tweak("animations", "Performance", "Turn off window animations",
+          "Windows open, minimise and maximise at once instead of animating, and the taskbar stops animating. "
+          "The desktop feels snappier on any PC; fonts and shadows are untouched.",
+          (Reg(HKCU, r"Control Panel\Desktop\WindowMetrics", "MinAnimate", "0", SZ, original="1"),
+           Reg(HKCU, ADV, "TaskbarAnimations", 0)), restart="sign out"),
+    Tweak("ntfs-last-access", "Performance", "Don't record when each file was last opened",
+          "NTFS stops writing a 'last accessed' time every time a file is read: fewer small writes while games "
+          "load thousands of files. Nothing in Windows depends on it (fsutil behavior disablelastaccess).",
+          (Reg(HKLM, r"SYSTEM\CurrentControlSet\Control\FileSystem", "NtfsDisableLastAccessUpdate", 0x80000001,
+               original=0x80000002),), restart="restart"),
+    Tweak("menu-delay", "Performance", "Menus open without the 0.4 s delay",
+          "Submenus (Start > All apps folders, right-click > Send to) open at once instead of after 400 ms.",
+          (Reg(HKCU, r"Control Panel\Desktop", "MenuShowDelay", "0", SZ, original="400"),), restart="sign out"),
+    Tweak("transparency", "Performance", "Turn off transparency effects",
+          "Taskbar, Start and window backgrounds become solid. Frees a little GPU time on older graphics.",
+          (Reg(HKCU, r"Software\Microsoft\Windows\CurrentVersion\Themes\Personalize", "EnableTransparency", 0,
+               original=1),)),
+    Tweak("search-indexing", "Performance", "Turn off search indexing",
+          "Stops the Windows Search service from indexing files in the background (less disk activity, mostly "
+          "noticeable on a hard disk). Searching Start, File Explorer and Outlook becomes slow, and Outlook's "
+          "own search may stop working.",
+          (service("WSearch", 4, original=2),), risk=MODERATE, restart="restart"),
+    Tweak("xbox-services", "Performance", "Turn off Xbox Live services",
+          "Disables Xbox sign-in, cloud saves and Xbox networking. The Xbox app, Game Pass and games that "
+          "sign in to Xbox stop working. Controllers keep working.",
+          (service("XblAuthManager", 4, original=3), service("XblGameSave", 4, original=3),
+           service("XboxNetApiSvc", 4, original=3)), risk=MODERATE),
+    Tweak("wu-drivers", "Performance", "Don't get drivers from Windows Update",
+          "Windows Update stops replacing your graphics and other drivers with its own, often older, versions "
+          "(policy ExcludeWUDriversInQualityUpdate). Security updates keep coming; you update drivers "
+          "yourself (NVIDIA App, AMD Software, the PC maker).",
+          (Reg(HKLM, rf"{POL}\WindowsUpdate", "ExcludeWUDriversInQualityUpdate", 1),), risk=MODERATE),
+
+    # ------------------------------------------------------------ Security
+    # The opposite of what tweak packs do: each one closes something.
+    Tweak("llmnr", "Security", "Turn off LLMNR name resolution",
+          "Windows stops asking the whole local network for names it cannot resolve through DNS -- the answer "
+          "can come from anyone, which is how password hashes are stolen on shared networks. Home networks "
+          "resolve names through DNS and mDNS anyway.",
+          (Reg(HKLM, r"SOFTWARE\Policies\Microsoft\Windows NT\DNSClient", "EnableMulticast", 0),)),
+    Tweak("autorun", "Security", "No AutoRun from USB drives and discs",
+          "A plugged-in drive can no longer start a program by itself (autorun.inf). Opening it by hand works "
+          "as before.",
+          (Reg(HKLM, r"SOFTWARE\Microsoft\Windows\CurrentVersion\Policies\Explorer", "NoDriveTypeAutoRun", 255),
+           Reg(HKLM, r"SOFTWARE\Microsoft\Windows\CurrentVersion\Policies\Explorer", "NoAutorun", 1)), default=True),
+    Tweak("smb1", "Security", "Remove SMB 1.0 file sharing",
+          "The 1980s file-sharing protocol WannaCry spread through. Only very old NAS boxes and printers need "
+          "it; Windows 10 1709 and later leave it out of new installs.",
+          action="smb1", default=True, restart="restart"),
+    Tweak("powershell-v2", "Security", "Remove PowerShell 2.0",
+          "An old PowerShell kept for compatibility. Attackers start it to skip the logging and script "
+          "checks of the current version; Microsoft removed it in Windows 11 24H2.",
+          action="powershell-v2", default=True, restart="restart"),
+    Tweak("defender-pua", "Security", "Defender blocks potentially unwanted apps",
+          "Microsoft Defender also blocks adware, bundled toolbars and crypto-miners that come with free "
+          "downloads (policy PUAProtection = Block). Only matters while Defender is your antivirus.",
+          (Reg(HKLM, r"SOFTWARE\Policies\Microsoft\Windows Defender", "PUAProtection", 1),), default=True),
+    Tweak("lsa-protection", "Security", "Protect saved sign-in secrets (LSA protection)",
+          "The process holding your password hashes (lsass) runs protected, so malware cannot read them out -- "
+          "the standard Mimikatz attack. Set without the UEFI lock (RunAsPPL = 2), so it can be undone. "
+          "Rare old security or smart-card plug-ins that are not signed stop loading.",
+          (Reg(HKLM, r"SYSTEM\CurrentControlSet\Control\Lsa", "RunAsPPL", 2),), risk=MODERATE, restart="restart"),
+    Tweak("wdigest", "Security", "Never keep sign-in passwords in plain text",
+          "Pins WDigest's UseLogonCredential to 0, so Windows never keeps a readable copy of your password in "
+          "memory -- malware turns this on to harvest it. Off is already Windows' default; this keeps it so.",
+          (Reg(HKLM, r"SYSTEM\CurrentControlSet\Control\SecurityProviders\WDigest", "UseLogonCredential", 0),),
+          default=True),
+    Tweak("remote-assistance", "Security", "Turn off Remote Assistance invitations",
+          "Nobody can connect to help you through a Remote Assistance invitation file. Quick Assist is "
+          "separate and keeps working.",
+          (Reg(HKLM, r"SYSTEM\CurrentControlSet\Control\Remote Assistance", "fAllowToGetHelp", 0, original=1),),
+          default=True),
+
+    # ------------------------------------------------------------ Diagnostics
+    Tweak("verbose-status", "Diagnostics", "Show what Windows is doing at start-up and shut-down",
+          "The spinning-dots screens say what they are waiting for ('Applying settings', 'Stopping services') "
+          "-- useful when start-up or shut-down hangs.",
+          (Reg(HKLM, r"SOFTWARE\Microsoft\Windows\CurrentVersion\Policies\System", "VerboseStatus", 1),)),
+    Tweak("bsod-details", "Diagnostics", "Show details on a blue screen",
+          "A blue screen lists the stop code's parameters, which is what you search for to find the failing "
+          "driver.",
+          (Reg(HKLM, r"SYSTEM\CurrentControlSet\Control\CrashControl", "DisplayParameters", 1),)),
+    Tweak("long-paths", "Diagnostics", "Allow file paths longer than 260 characters",
+          "Programs that support it (Git, Node, Python) can use deep folder trees without 'path too long' "
+          "errors. File Explorer itself still has the limit.",
+          (Reg(HKLM, r"SYSTEM\CurrentControlSet\Control\FileSystem", "LongPathsEnabled", 1, original=0),)),
+    Tweak("dev-telemetry", "Diagnostics", "Opt out of .NET and PowerShell 7 telemetry",
+          "Sets DOTNET_CLI_TELEMETRY_OPTOUT and POWERSHELL_TELEMETRY_OPTOUT for every account: the dotnet "
+          "command and pwsh stop sending usage data. Programs started afterwards see it.",
+          (Reg(HKLM, r"SYSTEM\CurrentControlSet\Control\Session Manager\Environment", "DOTNET_CLI_TELEMETRY_OPTOUT",
+               "1", SZ),
+           Reg(HKLM, r"SYSTEM\CurrentControlSet\Control\Session Manager\Environment", "POWERSHELL_TELEMETRY_OPTOUT",
+               "1", SZ)), restart="sign out"),
 
     # ------------------------------------------------------------ Services
     Tweak("retail-demo", "Services", "Disable the retail demo service",
@@ -556,11 +738,14 @@ class WinTasks:
     def states(self, paths: list[str]) -> dict[str, int]:
         if not paths:
             return {}
+        # One Get-ScheduledTask for every task (about 1 s) instead of one per
+        # path (3 s for the catalogue). Hashtable keys ignore case, as paths do.
         script = (
-            f"@({_ps_list(paths)}) | ForEach-Object {{ $i = $_.LastIndexOf('\\');"
-            " $t = Get-ScheduledTask -TaskPath $_.Substring(0, $i + 1) -TaskName $_.Substring($i + 1)"
-            " -ErrorAction SilentlyContinue;"
-            " [ordered]@{ path = $_; state = if ($t) { [int]$t.State } else { -1 } } } | ConvertTo-Json -Compress"
+            f"$want = @{{}}; foreach ($p in @({_ps_list(paths)})) {{ $want[$p] = -1 }};"
+            " Get-ScheduledTask -ErrorAction SilentlyContinue | ForEach-Object {"
+            " $k = $_.TaskPath + $_.TaskName; if ($want.ContainsKey($k)) { $want[$k] = [int]$_.State } };"
+            " @($want.GetEnumerator() | ForEach-Object { [ordered]@{ path = $_.Key; state = $_.Value } })"
+            " | ConvertTo-Json -Compress"
         )
         return {r["path"]: int(r["state"]) for r in _json_list(_powershell(script)) if "path" in r}
 
@@ -697,29 +882,45 @@ class Debloater:
     def _applicable(self, tweak: Tweak) -> list[Reg]:
         return [r for r in tweak.reg if not r.if_key_exists or self.registry.key_exists(r.hive, r.key)]
 
-    def state(self, tweak: Tweak, task_states: dict[str, int] | None = None) -> str:
+    def state(self, tweak: Tweak, task_states: dict[str, int] | None = None,
+              action_states: dict[str, bool | None] | None = None) -> str:
         """applied | partly | not applied | n/a"""
         checks: list[bool] = []
         for r in self._applicable(tweak):
             got = self.registry.get(r.hive, r.key, r.name)
             value = got[1] if got is not None else r.when_absent
-            checks.append(value is not None and value == r.value)
+            if r.value is None:
+                checks.append(got is None)
+            else:
+                checks.append(value is not None and value == r.value)
         if tweak.tasks:
             states = task_states if task_states is not None else self.tasks.states(list(tweak.tasks))
             checks += [states.get(t, -1) == 1 for t in tweak.tasks if states.get(t, -1) != -1]
         if tweak.action:
-            done = self.actions[tweak.action].applied()
+            if action_states is not None and tweak.action in action_states:
+                done = action_states[tweak.action]
+            else:
+                done = self.actions[tweak.action].applied()
             if done is not None:  # None: this Windows has no such feature
                 checks.append(done)
         if not checks:
             return "n/a"
         return "applied" if all(checks) else "partly" if any(checks) else "not applied"
 
-    def states(self) -> dict[str, str]:
-        """Every tweak's state, reading all scheduled tasks in one PowerShell call."""
-        paths = [t for tweak in TWEAKS for t in tweak.tasks]
-        task_states = self.tasks.states(paths) if paths and OS == "windows" else {}
-        return {t.id: self.state(t, task_states) for t in TWEAKS}
+    def states(self, tweaks: tuple[Tweak, ...] | list[Tweak] = TWEAKS) -> dict[str, str]:
+        """Every tweak's state. The slow reads -- all scheduled tasks in one
+        PowerShell call, and each action's own probe (DISM, optional
+        features) -- run side by side: about 1.5 s instead of 7."""
+        from concurrent.futures import ThreadPoolExecutor
+
+        paths = [t for tweak in tweaks for t in tweak.tasks]
+        names = sorted({t.action for t in tweaks if t.action})
+        with ThreadPoolExecutor(max_workers=len(names) + 1) as pool:
+            tasks = pool.submit(self.tasks.states, paths) if paths and OS == "windows" else None
+            probes = {n: pool.submit(self.actions[n].applied) for n in names}
+            task_states = tasks.result() if tasks else {}
+            action_states = {n: f.result() for n, f in probes.items()}
+        return {t.id: self.state(t, task_states, action_states) for t in tweaks}
 
     def installed_apps(self) -> dict[str, dict]:
         if self._installed is None:
@@ -739,7 +940,8 @@ class Debloater:
         journal = load_journal(self.journal_file)
         entry = journal["tweaks"].get(tweak.id)
         if entry is None:  # first application: this is the state to come back to
-            entry = {"applied": time.strftime("%Y-%m-%d %H:%M:%S"), "registry": [], "tasks": []}
+            entry = {"applied": time.strftime("%Y-%m-%d %H:%M:%S"), "title": tweak.title, "registry": [],
+                     "tasks": []}
             for r in self._applicable(tweak):
                 before = self.registry.get(r.hive, r.key, r.name)
                 entry["registry"].append({
@@ -758,7 +960,10 @@ class Debloater:
         failed: list[str] = []
         for r in self._applicable(tweak):
             try:
-                self.registry.set(r.hive, r.key, r.name, r.kind, r.value)
+                if r.value is None:
+                    self.registry.delete_value(r.hive, r.key, r.name)
+                else:
+                    self.registry.set(r.hive, r.key, r.name, r.kind, r.value)
             except OSError as e:
                 failed.append(f"{r.name}: {e.strerror or e}")
         for task in entry["tasks"]:
@@ -895,6 +1100,8 @@ class Action:
 class ReservedStorage(Action):
     """Windows' own cmdlets; their State is an enum, so the text is never translated."""
 
+    tech = "Set-WindowsReservedStorageState -State Disabled   (DISM; undo: -State Enabled)"
+
     def applied(self) -> bool | None:
         out = _powershell("try { \"$((Get-WindowsReservedStorageState -ErrorAction Stop).ReservedStorageState)\" }"
                           " catch { 'none' }").strip()
@@ -920,6 +1127,7 @@ class Hibernation(Action):
     """powercfg writes HibernateEnabled and deletes or recreates hiberfil.sys."""
 
     KEY = r"SYSTEM\CurrentControlSet\Control\Power"
+    tech = r"powercfg /hibernate off   (HKLM\SYSTEM\CurrentControlSet\Control\Power HibernateEnabled = 0)"
 
     def applied(self) -> bool | None:
         if OS != "windows":
@@ -952,6 +1160,7 @@ class PowerPlan(Action):
     BALANCED = "381b4222-f694-41f0-9685-ff5bb260df2e"
     SAVER = "a1841308-3541-4fab-bc81-f71556f20b4a"
     HIGH = "8c5e7fda-e8bf-4a96-9a85-a6e23a8c635c"
+    tech = f"powercfg /setactive {HIGH}   (High performance; any non-Balanced plan counts as on)"
 
     def active(self) -> str | None:
         if OS != "windows":
@@ -991,6 +1200,7 @@ class OptionalFeature(Action):
 
     def __init__(self, name: str) -> None:
         self.name = name
+        self.tech = f"Disable-WindowsOptionalFeature -Online -FeatureName {name} -NoRestart"
 
     def applied(self) -> bool | None:
         out = _powershell(f"try {{ \"$((Get-WindowsOptionalFeature -Online -FeatureName {self.name}"
@@ -1029,6 +1239,7 @@ class RegistryField(Action):
         self.key, self.name = key, name
         self._on, self._off, self._is_on = on, off, is_on
         self._registry = registry
+        self.tech = f"HKCU\\{key}  {name}  (one field edited in place, the rest kept)"
 
     @property
     def reg(self):
@@ -1081,12 +1292,12 @@ def _dx_join(pairs: dict[str, str]) -> str | None:
     return "".join(f"{k}={v};" for k, v in pairs.items()) or None
 
 
-def _dx_set(text: str | None, value: str | None) -> str | None:
+def _dx_set(text: str | None, value: str | None, name: str = "SwapEffectUpgradeEnable") -> str | None:
     pairs = _dx_pairs(text)
     if value is None:
-        pairs.pop("SwapEffectUpgradeEnable", None)
+        pairs.pop(name, None)
     else:
-        pairs["SwapEffectUpgradeEnable"] = value
+        pairs[name] = value
     return _dx_join(pairs)
 
 
@@ -1105,10 +1316,16 @@ ACTIONS = {
     "hibernation": Hibernation(),
     "power-plan": PowerPlan(),
     "virtual-machine-platform": OptionalFeature("VirtualMachinePlatform"),
+    "smb1": OptionalFeature("SMB1Protocol"),
+    "powershell-v2": OptionalFeature("MicrosoftWindowsPowerShellV2Root"),
     "windowed-games": RegistryField(
         r"Software\Microsoft\DirectX\UserGpuPreferences", "DirectXUserGlobalSettings",
         on=lambda t: _dx_set(t, "1"), off=lambda t: _dx_set(t, None),
         is_on=lambda t: _dx_pairs(t).get("SwapEffectUpgradeEnable") == "1"),
+    "vrr-windowed": RegistryField(
+        r"Software\Microsoft\DirectX\UserGpuPreferences", "DirectXUserGlobalSettings",
+        on=lambda t: _dx_set(t, "1", "VRROptimizeEnable"), off=lambda t: _dx_set(t, None, "VRROptimizeEnable"),
+        is_on=lambda t: _dx_pairs(t).get("VRROptimizeEnable") == "1"),
     "sticky-keys-hotkey": RegistryField(
         r"Control Panel\Accessibility\StickyKeys", "Flags",
         on=lambda t: str(_flags(t) & ~STICKY_HOTKEY), off=lambda t: str(_flags(t) | STICKY_HOTKEY),
@@ -1132,6 +1349,32 @@ def restart_explorer() -> None:
         if _explorer_running():
             return
     subprocess.run(["runas", "/trustlevel:0x20000", "explorer.exe"], capture_output=True, creationflags=NO_WINDOW)
+
+
+START_TYPES = {2: "Automatic", 3: "Manual", 4: "Disabled"}
+
+
+def tech(tweak: Tweak) -> list[str]:
+    """What a tweak changes, exactly: registry values, tasks, commands."""
+    lines: list[str] = []
+    for r in tweak.reg:
+        if r.value is None:
+            lines.append(f"{r.hive}\\{r.key}  {r.name}: delete")
+            continue
+        value = f'"{r.value}"' if r.kind == SZ else hex(r.value) if r.value >= 0x10000 else str(r.value)
+        if r.key.startswith(r"SYSTEM\CurrentControlSet\Services") and r.name == "Start":
+            svc = r.key.rsplit("\\", 1)[-1]
+            lines.append(f"service {svc}: Start = {r.value} ({START_TYPES.get(r.value, r.value)})"
+                         + (f", default {START_TYPES.get(r.original, r.original)}" if r.original else ""))
+            continue
+        name = r.name or "(Default)"
+        kind = "REG_SZ" if r.kind == SZ else "REG_DWORD"
+        lines.append(f"{r.hive}\\{r.key}  {name} = {value} {kind}")
+    for t in tweak.tasks:
+        lines.append(f"scheduled task {t}: Disabled")
+    if tweak.action:
+        lines.append(getattr(ACTIONS[tweak.action], "tech", tweak.action))
+    return lines
 
 
 def recommended(env: Env) -> list[Tweak]:

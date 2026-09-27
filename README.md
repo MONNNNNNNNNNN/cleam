@@ -26,13 +26,34 @@ irm https://raw.githubusercontent.com/MONNNNNNNNNNN/cleam/main/menu.ps1 | iex
 ## Debloat Windows 10/11
 
 `cleam` with no arguments opens a menu -- mouse and keyboard, block-letter
-banner, checkboxes, a progress bar -- and **Debloat Windows** lists 62 tweaks
-in eight groups (power and storage, privacy, ads and suggestions, search and
-Start, AI and Copilot, taskbar and Explorer, gaming and comfort, services)
-plus preinstalled apps, each with
-what it does and what you lose. Already-set ones are greyed out, and the
-recommended set is ticked for you. From scripts: `cleam debloat list`,
-`cleam debloat apply --recommended [--snapshot]`, `cleam debloat undo --all`.
+banner, checkboxes. Point at an item and it lights up; click to open it.
+While the menu is on screen, Cleam already reads what every page needs
+(debloat state, the system check, the junk scan), so a page opens at once.
+
+**Debloat** splits in two. **Basic**: privacy, ads and suggestions, search,
+AI features, taskbar clutter, bloat apps -- all safe. **Advanced**: power and
+storage, services, gaming, performance, security hardening, diagnostics,
+developer and app telemetry, anything rated moderate, and apps that keep
+their own data. 84 tweaks in all. Every row shows what Windows has now (ON /
+off / PARTLY / why it is unavailable) and **a tick is applied the moment you
+make it** -- no review step. Cleam then reads the setting back from Windows,
+so a value a policy or another tool puts straight back shows "not kept"
+rather than a tick that lies. The panel under the list shows exactly what a
+row changes (registry path, value and type; service start type; task;
+command); `?` switches it to plain words. From scripts: `cleam debloat list
+[--json]`, `cleam debloat apply --recommended [--snapshot]`, `cleam debloat
+undo --all`.
+
+The Advanced additions came from comparing against Optimizer 16.7 and Stix
+Tweaker: Cleam takes what has a documented effect and a clean way back
+(Edge startup boost / background mode, Store apps in the background, Windows
+Update drivers, search indexing, Xbox Live services, LLMNR, AutoRun, SMB 1.0,
+PowerShell 2.0, Remote Assistance, Office / Visual Studio / Firefox / NVIDIA
+/ .NET telemetry, verbose status, blue-screen details, long paths) and leaves
+out what lowers security or is a myth: disabling Windows Update, BITS,
+Defender or VBS; disabling HPET and other devices; IPv6 off; Spooler and
+SysMain off; memory compression off; and the MMCSS, timer, network-throttle
+and priority-separation values.
 
 - **Every change can be undone exactly.** Before a value is changed, its old
   state (absent, or its type and data) is saved to
@@ -199,13 +220,33 @@ timer-resolution tools.
 ## Security
 
 `cleam security` (and the Security page) answers "is anything protecting this
-PC, and has something already got in?" It changes nothing:
+PC, and has something already got in?" It reads first; every problem that
+software can fix has a **Fix** under it, which says exactly what it will
+change before it runs (registry and service changes are journalled, so Undo
+debloat reverses them). From scripts: `cleam security --fix` lists them,
+`cleam security --fix <id>` shows one, `--yes` runs it.
+
+- **What tweak tools leave broken is found and repaired:** Windows Update
+  blocked by policy (including a made-up WSUS server that no longer
+  resolves) or by disabled services, Defender switched off by policy,
+  SmartScreen off, hosts-file lines blocking Microsoft's update and security
+  addresses, devices switched off in Device Manager, SSD TRIM off, boot timer
+  values (`useplatformclock`, `disabledynamictick`, ...), the weekly drive
+  optimization task disabled, the page file off.
+- **Gaming hardware set-up:** memory at its fallback speed (XMP/EXPO off) or
+  single channel, a monitor below its highest refresh rate (switched in one
+  click), GPU driver age, PCIe link width and Resizable BAR (NVIDIA), CPU
+  capped below 100 % by the power plan, BIOS age, drives nearly full.
+  Firmware settings get "Restart into the UEFI setup" and what to switch on.
 
 - **System check groups:** Protection, Updates (last update age, Windows 10
   ESU until 12 Oct 2027, restart pending), Hardware security (Secure Boot, TPM,
   drive encryption, memory integrity), Network exposure (SMBv1, Remote
   Desktop and NLA, Guest), Health (disk health, wear and temperature, crashes
   in 30 days, devices with problems) and Gaming (Game Mode, HAGS, power plan).
+  In the menu every group is a dropdown: a group with an alert opens by
+  itself, alerts are a red ALERT block and checks a yellow CHECK block, and
+  each is written out in full with its fix.
 - **Protection:** the active antivirus and whether its definitions are
   current, Microsoft Defender's real-time state (and whether a policy turned
   it off), Controlled Folder Access (Windows' ransomware shield), restore

@@ -390,5 +390,79 @@ class Catalogue(unittest.TestCase):
             self.assertTrue(t.reg or t.tasks or t.action, t.id)
 
 
+class Tiers(unittest.TestCase):
+    def test_basic_holds_nothing_risky(self):
+        for t in d.TWEAKS:
+            if d.tier(t) == d.BASIC:
+                self.assertEqual(t.risk, d.SAFE, t.id)
+                self.assertNotIn(t.group, d.ADVANCED_GROUPS, t.id)
+
+    def test_both_tiers_have_tweaks_and_apps_follow_their_default(self):
+        tiers = {d.tier(t) for t in d.TWEAKS}
+        self.assertEqual(tiers, {d.BASIC, d.ADVANCED})
+        for app in d.APPS:
+            self.assertEqual(d.tier(app), d.BASIC if app.default else d.ADVANCED, app.id)
+
+
+class Tech(unittest.TestCase):
+    def test_every_tweak_says_exactly_what_it_changes(self):
+        for t in d.TWEAKS:
+            lines = d.tech(t)
+            self.assertTrue(lines, t.id)
+            self.assertEqual(len(lines), len(t.reg) + len(t.tasks) + (1 if t.action else 0), t.id)
+
+    def test_values_services_and_tasks_are_spelled_out(self):
+        self.assertIn(r"HKCU\Software\Microsoft\Windows\CurrentVersion\AdvertisingInfo  Enabled = 0 REG_DWORD",
+                      d.tech(tweak("advertising-id")))
+        self.assertEqual(d.tech(tweak("retail-demo")), ["service RetailDemo: Start = 4 (Disabled), default Manual"])
+        self.assertIn("(Default) = \"\" REG_SZ", d.tech(tweak("classic-context-menu"))[0])
+        self.assertIn("SMB1Protocol", d.tech(tweak("smb1"))[0])
+
+
+class Research(unittest.TestCase):
+    """What was learnt from Optimizer 16.7 and Stix Tweaker (2026-09-27)."""
+
+    def setUp(self):
+        self.journal = Path(tempfile.mkdtemp()) / "journal.json"
+
+    def test_vendor_apps_reads_on_only_when_the_setting_windows_uses_is_set_too(self):
+        # Mon ticked it and it came back unticked: another tool had set only
+        # the Settings value, and Cleam checked only the policy.
+        t = tweak("device-companion-apps")
+        settings_value = (d.HKLM, r"SOFTWARE\Microsoft\Windows\CurrentVersion\Device Metadata",
+                          "PreventDeviceMetadataFromNetwork")
+        reg = FakeRegistry({settings_value: (4, 1)})
+        b = d.Debloater(reg, FakeTasks({}), FakeApps(()), WIN11_PRO_ADMIN, self.journal)
+        self.assertEqual(b.state(t), "partly")
+        self.assertTrue(b.apply(t).ok)
+        self.assertEqual(b.state(t), "applied")
+        self.assertTrue(b.revert(t).ok)
+        self.assertEqual(reg.get(*settings_value), (4, 1))  # Cleam's undo puts back what was there
+
+    def test_nothing_from_the_tweak_packs_that_lowers_security_or_is_a_myth(self):
+        names = {r.name.lower() for t in d.TWEAKS for r in t.reg}
+        for myth in ("systemresponsiveness", "networkthrottlingindex", "win32priorityseparation",
+                     "disabledcomponents", "enablevirtualizationbasedsecurity", "disablewindowsupdateaccess",
+                     "coalescingtimerinterval", "ioLatencycap".lower(), "powerthrottlingoff"):
+            self.assertNotIn(myth, names)
+        services = {r.key.rsplit("\\", 1)[-1].lower() for t in d.TWEAKS for r in t.reg if r.name == "Start"}
+        for kept in ("wuauserv", "bits", "usosvc", "spooler", "sysmain", "dosvc", "waasmedicsvc"):
+            self.assertNotIn(kept, services)
+
+    def test_states_probe_each_action_once_in_one_pass(self):
+        class Counting(FakeAction):
+            n = 0
+
+            def applied(self):
+                Counting.n += 1
+                return self.on
+
+        actions = {name: Counting(False) for name in d.ACTIONS}
+        b = d.Debloater(FakeRegistry(), FakeTasks({}), FakeApps(()), WIN11_PRO_ADMIN, self.journal, actions)
+        states = b.states()
+        self.assertEqual(Counting.n, len(d.ACTIONS))
+        self.assertEqual(set(states), {t.id for t in d.TWEAKS})
+
+
 if __name__ == "__main__":
     unittest.main()
