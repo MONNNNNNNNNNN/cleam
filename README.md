@@ -17,6 +17,46 @@ It downloads the window from the latest release into
 publishes, and starts it. Later runs only download when there is a newer
 release. Use an elevated PowerShell to include the system targets.
 
+For the terminal menu instead of the window (ASCII, arrow keys and checkboxes):
+
+```powershell
+irm https://raw.githubusercontent.com/MONNNNNNNNNNN/cleam/main/menu.ps1 | iex
+```
+
+## Debloat Windows 10/11
+
+`cleam` with no arguments opens a menu -- mouse and keyboard, block-letter
+banner, checkboxes, a progress bar -- and **Debloat Windows** lists 62 tweaks
+in eight groups (power and storage, privacy, ads and suggestions, search and
+Start, AI and Copilot, taskbar and Explorer, gaming and comfort, services)
+plus preinstalled apps, each with
+what it does and what you lose. Already-set ones are greyed out, and the
+recommended set is ticked for you. From scripts: `cleam debloat list`,
+`cleam debloat apply --recommended [--snapshot]`, `cleam debloat undo --all`.
+
+- **Every change can be undone exactly.** Before a value is changed, its old
+  state (absent, or its type and data) is saved to
+  `%LOCALAPPDATA%\Cleam\debloat\journal.json`, and undo puts back *that*,
+  not "the Windows default". Apps are removed for your account only, so undo
+  registers them again from the copy Windows keeps -- the app, not its data:
+  Windows deletes an app's own data when it is removed, so apps that keep
+  notes or settings only on this PC (Sticky Notes, Journal, Alarms...) are
+  never ticked for you.
+- **Nothing that only looks like it works.** Several policies other tools
+  apply are documented by Microsoft as Enterprise/Education only
+  (`DisableWindowsConsumerFeatures`, Windows tips, `AllowTelemetry=0` meaning
+  "off"). Cleam uses the per-user settings that work on every edition, and
+  shows edition-limited tweaks as "not on Pro" instead of applying them.
+- **Disk space too:** Reserved Storage (about 7 GB on a typical C:) and
+  hibernation are Windows commands, not registry values; their previous state
+  is journalled the same way and undo turns them back on.
+- **Never touched:** Microsoft Store, Edge, Windows Terminal and the Xbox
+  identity packages (other apps need them), Windows Update, Defender,
+  SmartScreen and UAC.
+
+The app list and its risk ratings come from
+[Win11Debloat](https://github.com/Raphire/Win11Debloat) (MIT).
+
 ## Install
 
 ```sh
@@ -131,11 +171,41 @@ kept. Package-manager caches are cleared by the package manager itself
 (`npm cache clean --force`, `pip cache purge`, …), which is the one thing that
 knows which files belong together; what it freed is measured, not assumed.
 
+## Live on/off sync
+
+Every Debloat row shows what the system has **now** -- `√ ON`, `○ off`,
+`± PARTLY`, or greyed out with the reason (`Windows 11 only`, `not on Pro`,
+`needs admin`) -- and its box starts in that state. Tick to turn something on,
+untick to turn it off; the row shows the pending change (`→ turn off`) and
+Enter applies only what you changed. After a run the list is read from the
+system again. Turning off something Cleam did not turn on puts back Windows'
+default (policy values removed, services to their shipped startup type, tasks
+re-enabled); Cleam's own changes are undone exactly from the journal.
+`cleam debloat revert <ids>` does the same from a script.
+
+## Gaming
+
+Gaming & comfort holds only changes with a documented effect: Game Mode,
+optimizations for windowed games (flip model, VRR, Auto HDR -- Windows 11),
+hardware-accelerated GPU scheduling, mouse acceleration off, a high
+performance power plan, Virtual Machine Platform off (Microsoft's gaming guide
+lists it; WSL 2 and Docker need it), background recording off. Two of these
+share a registry value with other settings (DirectX's global settings string,
+Sticky Keys' flag bits), so Cleam edits only its own part. Not included,
+because the evidence is anecdotal or negative: NetworkThrottlingIndex,
+SystemResponsiveness, Win32PrioritySeparation, disabling HPET or SysMain,
+timer-resolution tools.
+
 ## Security
 
 `cleam security` (and the Security page) answers "is anything protecting this
 PC, and has something already got in?" It changes nothing:
 
+- **System check groups:** Protection, Updates (last update age, Windows 10
+  ESU until 12 Oct 2027, restart pending), Hardware security (Secure Boot, TPM,
+  drive encryption, memory integrity), Network exposure (SMBv1, Remote
+  Desktop and NLA, Guest), Health (disk health, wear and temperature, crashes
+  in 30 days, devices with problems) and Gaming (Game Mode, HAGS, power plan).
 - **Protection:** the active antivirus and whether its definitions are
   current, Microsoft Defender's real-time state (and whether a policy turned
   it off), Controlled Folder Access (Windows' ransomware shield), restore

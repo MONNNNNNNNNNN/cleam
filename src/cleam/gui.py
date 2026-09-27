@@ -486,6 +486,7 @@ def _clean_page(page: ft.Page) -> tuple[ft.Control, object, object]:
                 page.update()
                 return
         freed = errors = 0
+        stayed: list[str] = []
         for i, (target, _, _) in enumerate(chosen):
             busy.value = i / len(chosen)
             status.value = f"Cleaning {target.label}… ({i + 1} of {len(chosen)})"
@@ -493,15 +494,17 @@ def _clean_page(page: ft.Page) -> tuple[ft.Control, object, object]:
             result = junk.run(target, delete=True)
             freed += result.bytes
             errors += result.errors
+            if result.errors:
+                stayed.append(f"{target.label} ({result.errors:,})")
+        # Result.errors is not only "in use": a denied folder, a package
+        # manager that failed and a driver Windows refused count too. So the
+        # banner names where things stayed instead of guessing why.
+        where = f" Left behind: {', '.join(stayed)}. A file in use or a refused cleaner is the usual cause." if stayed else ""
         if freed:
-            message = f"Freed {human(freed)}."
-            if errors:
-                message += f" {errors:,} files were in use and stayed."
-            show_outcome(message, "ok")
+            show_outcome(f"Freed {human(freed)}.{where}", "ok")
         elif errors:
             # Not a success: "Freed 0 B" on a green banner read as one.
-            show_outcome(f"Nothing could be removed: {errors:,} files are in use. Close the programs using them"
-                         " (browsers, games, the app itself) and clean again.", "warn")
+            show_outcome(f"Nothing could be removed.{where} Close programs using those files and clean again.", "warn")
         else:
             show_outcome("Nothing was left to remove.", "ok")
         scan(keep_outcome=True)  # re-scan, so the list shows what is actually left
@@ -727,8 +730,10 @@ STATE_ICON = {
     security.WARN: (ft.Icons.WARNING_AMBER, ft.Colors.TERTIARY),
     security.BAD: (ft.Icons.ERROR, ft.Colors.ERROR),
     security.UNKNOWN: (ft.Icons.HELP_OUTLINE, MUTED),
+    security.INFO: (ft.Icons.INFO_OUTLINE, MUTED),
 }
-STATE_WORD = {security.OK: "OK", security.WARN: "Check", security.BAD: "Problem", security.UNKNOWN: "Unknown"}
+STATE_WORD = {security.OK: "OK", security.WARN: "Check", security.BAD: "Problem", security.UNKNOWN: "Unknown",
+              security.INFO: "Info"}
 
 
 def _state_row(state: str, title: str, lines: list[str], tooltip: str | None = None) -> ft.Control:
@@ -768,7 +773,7 @@ def _security_page(page: ft.Page) -> tuple[ft.Control, object]:
             f"{len(bad)} problem(s), {len(warn)} to check." if bad or warn else "Nothing needs your attention."
         )
         checks_col.controls = [
-            _state_row(c.state, c.label, [c.detail, c.fix and f"How to fix: {c.fix}"],
+            _state_row(c.state, f"{c.group} · {c.label}", [c.detail, c.fix and c.state != security.OK and f"How to fix: {c.fix}"],
                        tooltip=c.fix or None)  # the whole fix, where three lines cut it short
             for c in checks
         ]

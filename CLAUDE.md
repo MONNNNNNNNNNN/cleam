@@ -296,6 +296,85 @@ Windows keeps any a device still uses; the clean's result is measured.
 Mon's "driver management 2.4 GB" in Disk Cleanup was this handler; 509 MB
 remained afterwards.
 
+## Debloat (`debloat.py`) and the terminal menu (`tui.py`), 2026-09-26
+
+Mon asked for an ASCII UI with checkboxes and deep Windows debloat.
+
+- **The journal is the undo.** `Debloater.apply` saves each value's previous
+  state (absent, or kind+data, and whether its key existed) *before* writing,
+  and a re-apply never overwrites the first record. Undo restores that, not
+  a default -- the .reg undo files of Win11Debloat restore defaults, which is
+  wrong on any machine with its own setting. A key Cleam created is deleted
+  on undo: the Win11 classic context menu is switched on by the
+  `{86ca1aa0...}\InprocServer32` key existing at all.
+- **Services are registry values** (`Services\<name>\Start`, `if_key_exists`),
+  so they share the journal; a missing service is never created. Tasks are
+  read as the TaskState enum's number through PowerShell (schtasks text is
+  localized). Apps: `Remove-AppxPackage` for the current user only, undo with
+  `Add-AppxPackage -RegisterByFamilyName`.
+- **Edition truth, from Microsoft's Policy CSP pages:**
+  AllowWindowsConsumerFeatures, AllowWindowsTips and AllowWindowsSpotlight
+  are "❌ Pro"; AllowTelemetry=0 is Enterprise/Education/Server only;
+  TurnOffWindowsCopilot is deprecated and does not control the Copilot app
+  (the April 2026 RemoveMicrosoftCopilotApp policy / removing the app does).
+  WinUtil's telemetry tweak runs `Set-Service wermgr`, which is not a service.
+- **Mon's desktop was already debloated** (almost every tweak "applied"
+  before Cleam touched it), so `cleam debloat list` there is mostly greyed out.
+- **Known limit:** HKCU tweaks go to the account Cleam runs as. Elevating a
+  standard user with an admin's password writes the admin's HKCU.
+- **TUI:** stdlib only (msvcrt / termios + ANSI, alternate screen, one write
+  per frame, `clip()` counts visible characters so a long line never wraps
+  and shifts the frame). Bare `cleam` opens it when stdin/stdout are a TTY.
+  **Symbols (measured, not assumed):** a PowerShell GlyphTypeface check of
+  consola.ttf and lucon.ttf found box drawing, blocks, ╔╗╚╝║═ and
+  ■ √ · × ○ ♦ ¤ ≈ ∞ ▬ ± ♣ ▼ ░ ◘ ◄ ↑, but no ✓ ✗ ☐ ☑ ⚠ ⚙ ★. The classic
+  console has no font fallback, so those print as boxes; Windows Terminal
+  (WT_SESSION) falls back and gets them. `GLYPH_SETS` rich/console/ascii,
+  `CLEAM_GLYPHS` overrides; a test pins the console set to the measured
+  list. No emoji: two cells wide. Bold black on the cyan accent renders
+  grey in the classic console, so accent backgrounds are never bold.
+  Mon's desktop has no Cascadia font (Windows 10).
+  **Actions:** reserved storage and hibernation are Windows commands, not
+  values: `ACTIONS` objects with applied()/apply()/undo(); the journal keeps
+  `action_was_applied`, and undo only reverses what Cleam changed.
+  Reserved storage was ~7.1 GB on Mon's C: (fsutil storagereserve query).
+  **Sync (2026-09-27):** Debloat rows start as the live state (Row.was ==
+  checked); checklist() returns only rows whose box changed; ticked =
+  apply, unticked = `Debloater.revert()`: the journal's exact undo when
+  Cleam made it, else Windows' default (`Reg.original`, None = delete the
+  value; services carry their shipped Start type). The list is re-read after
+  every run.
+  **Actions v2:** snapshot() -> journal, undo(snapshot), reset() to default.
+  RegistryField edits one part of a shared value: DirectXUserGlobalSettings
+  ("SwapEffectUpgradeEnable=1;VRROptimizeEnable=0;...", shared with VRR and
+  Auto HDR) and StickyKeys Flags (bit 0x4 = hotkey; the common "506" also
+  clears the Sticky-Keys-on bit for people who use it). Mon's flags were 498.
+  **Gaming evidence:** in -- Game Mode, windowed-games flip model (Microsoft
+  support), HAGS (DirectX blog; DLSS FG needs it), mouse acceleration off,
+  performance power plan (GUIDs, not names, from powercfg), VMP off
+  (Microsoft's gaming guide). Out -- NetworkThrottlingIndex,
+  SystemResponsiveness, Win32PrioritySeparation, HPET/SysMain disabling,
+  timer resolution: no reproducible gain, documented DPC/audio regressions.
+  Memory integrity off is shown as an INFO trade-off, never offered as a
+  tweak (a cleaner does not lower security).
+  **System check (security.status):** one PowerShell pass, ~4.5 s, 21 checks
+  in CHECK_GROUPS. Mon's desktop on 2026-09-27: last update 2026-04-29 (151
+  days, BAD), Windows 10 on ESU (until 12 Oct 2027 per microsoft.com),
+  Secure Boot off (Battlefield 6 / Valorant-on-11 refuse), HPET and the
+  RZ616 Wi-Fi in error in Device Manager, disks healthy, no crashes.
+  **Mouse:** Windows input is read with ReadConsoleInputW (msvcrt cannot
+  see mouse events), with ENABLE_MOUSE_INPUT on and Quick Edit off (it eats
+  clicks for text selection); the old input mode is restored on exit. Mouse
+  Y is a buffer coordinate, so the window's top row is subtracted. Every
+  frame records the spans it drew (rows, group titles, `[ buttons ]`) and a
+  click is hit-tested against them; POSIX uses xterm SGR mouse reporting.
+  Long jobs draw a progress bar in the menu; their children all run with
+  NO_WINDOW, so no other window appears.
+  To drive it in tests on Windows, SendKeys does *not* work for arrows
+  (conhost drops arrow events without scan code + ENHANCED_KEY); inject
+  KEY_EVENT records with WriteConsoleInputW instead -- they arrive as
+  `'\xe0' 'P'` exactly like a keyboard.
+
 ## AI: advisory only, and not built yet
 
 Mon asked about AI deciding junk vs important (2026-09-18). The answer stayed

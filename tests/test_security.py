@@ -51,6 +51,71 @@ class WindowsChecks(unittest.TestCase):
         self.assertEqual(self.by_id({"shadows": 0})["restore-points"].state, s.WARN)
 
 
+class SystemChecks(unittest.TestCase):
+    import datetime as _dt
+    TODAY = _dt.date(2026, 9, 27)
+
+    def by_id(self, raw):
+        return {c.id: c for c in s.system_checks(raw, self.TODAY)}
+
+    def test_update_age_thresholds(self):
+        self.assertEqual(self.by_id({"last_update": "2026-09-10"})["last-update"].state, s.OK)
+        self.assertEqual(self.by_id({"last_update": "2026-07-20"})["last-update"].state, s.WARN)
+        self.assertEqual(self.by_id({"last_update": "2026-04-29"})["last-update"].state, s.BAD)  # this PC: 151 days
+
+    def test_windows_10_support_is_esu_until_2027_then_bad(self):
+        self.assertEqual(self.by_id({"build": 19045})["windows-10-support"].state, s.INFO)
+        import datetime as dt
+        after = {c.id: c for c in s.system_checks({"build": 19045}, dt.date(2027, 10, 13))}
+        self.assertEqual(after["windows-10-support"].state, s.BAD)
+        self.assertNotIn("windows-10-support", self.by_id({"build": 26100}))
+
+    def test_secure_boot_off_warns_and_names_the_games(self):
+        c = self.by_id({"secureboot": False})["secure-boot"]
+        self.assertEqual(c.state, s.WARN)
+        self.assertIn("Battlefield 6", c.detail)
+        self.assertEqual(self.by_id({"secureboot": None})["secure-boot"].state, s.UNKNOWN)
+
+    def test_exposure(self):
+        self.assertEqual(self.by_id({"smb1": True})["smb1"].state, s.BAD)
+        self.assertEqual(self.by_id({"rdp_deny": 0, "rdp_nla": 0})["rdp"].state, s.BAD)
+        self.assertEqual(self.by_id({"rdp_deny": 0, "rdp_nla": 1})["rdp"].state, s.WARN)
+        self.assertEqual(self.by_id({"rdp_deny": 1})["rdp"].state, s.OK)
+        self.assertEqual(self.by_id({"guest": True})["guest"].state, s.WARN)
+
+    def test_encryption_matters_more_on_a_laptop(self):
+        off = {"status": "FullyDecrypted", "protection": "Off"}
+        self.assertEqual(self.by_id({"bitlocker": off, "battery": 0})["encryption"].state, s.INFO)
+        self.assertEqual(self.by_id({"bitlocker": off, "battery": 1})["encryption"].state, s.WARN)
+
+    def test_disk_health_wear_and_heat(self):
+        checks = s.system_checks({"disks": [
+            {"name": "A", "media": "SSD", "health": "Healthy", "wear": 3, "temp": 40},
+            {"name": "B", "media": "SSD", "health": "Healthy", "wear": 95, "temp": 40},
+            {"name": "C", "media": "HDD", "health": "Warning", "wear": None, "temp": 70},
+        ]}, self.TODAY)
+        states = [c.state for c in checks if c.id == "disk"]
+        self.assertEqual(states, [s.OK, s.WARN, s.BAD])
+
+    def test_crashes_and_devices(self):
+        c = self.by_id({"crashes": [{"id": 1001, "count": 2}, {"id": 41, "count": 1}], "bad_devices": ["Wi-Fi"]})
+        self.assertEqual(c["crashes"].state, s.WARN)
+        self.assertIn("2 blue screen", c["crashes"].detail)
+        self.assertEqual(c["devices"].state, s.WARN)
+        self.assertEqual(self.by_id({"crashes": {"id": 41, "count": 1}})["crashes"].state, s.WARN)  # bare object
+
+    def test_memory_integrity_off_is_a_trade_off_not_a_failure(self):
+        self.assertEqual(self.by_id({"hvci": 0})["memory-integrity"].state, s.INFO)
+
+    def test_every_check_is_in_a_known_group(self):
+        raw = {"build": 19045, "last_update": "2026-04-29", "secureboot": False, "tpm": {"present": True, "ready": True},
+               "hvci": 0, "smb1": False, "rdp_deny": 1, "disks": [{"name": "A", "health": "Healthy"}],
+               "crashes": [], "bad_devices": [], "uptime_h": 400, "game_mode": 0, "hags": 1,
+               "power": "381b4222-f694-41f0-9685-ff5bb260df2e"}
+        for c in s.windows_checks(raw, self.TODAY):
+            self.assertIn(c.group, s.CHECK_GROUPS, c.id)
+
+
 class ProgramOf(unittest.TestCase):
     def test_quoted(self):
         self.assertEqual(s.program_of('"C:\\A B\\x.exe" -background'), "C:\\A B\\x.exe")

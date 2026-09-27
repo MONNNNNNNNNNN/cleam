@@ -6,8 +6,8 @@ import json
 import sys
 from dataclasses import asdict
 
-from . import __version__, apps, junk, leftovers, overview, security, snapshot
-from .system import human
+from . import __version__, apps, debloat, junk, leftovers, overview, security, snapshot
+from .system import OS, human
 
 
 def cmd_overview(args) -> int:
@@ -254,7 +254,21 @@ def cmd_snapshot(args) -> int:
 def parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(prog="cleam", description="Clean junk files, uninstall programs, take snapshots.")
     p.add_argument("--version", action="version", version=f"cleam {__version__}")
-    sub = p.add_subparsers(dest="command", required=True)
+    sub = p.add_subparsers(dest="command")
+
+    m = sub.add_parser("menu", help="the interactive menu (also what bare `cleam` opens)")
+    m.set_defaults(fn=cmd_menu)
+
+    d = sub.add_parser("debloat", help="Windows privacy, ads, AI and app debloat; every change can be undone")
+    d.add_argument("action", choices=("list", "apply", "undo", "revert"),
+                   help="revert: turn tweaks off whoever turned them on (Cleam's own are undone exactly)")
+    d.add_argument("ids", nargs="*", help="tweak ids from `cleam debloat list`")
+    d.add_argument("--recommended", action="store_true", help="apply: add every recommended tweak")
+    d.add_argument("--all", action="store_true", help="undo: everything Cleam changed")
+    d.add_argument("--yes", action="store_true", help="apply without asking")
+    d.add_argument("--snapshot", action="store_true", help="create a restore point first, abort if it fails")
+    d.add_argument("--json", action="store_true")
+    d.set_defaults(fn=cmd_debloat)
 
     o = sub.add_parser("overview", help="OS, disk usage and where the space went")
     o.add_argument("--json", action="store_true")
@@ -321,6 +335,82 @@ def parser() -> argparse.ArgumentParser:
     return p
 
 
+def cmd_menu(args) -> int:
+    from . import tui
+
+    return tui.run()
+
+
+def _pick(ids: list[str], recommended: bool) -> list[debloat.Tweak]:
+    by_id = {t.id: t for t in debloat.TWEAKS}
+    unknown = [i for i in ids if i not in by_id]
+    if unknown:
+        raise SystemExit(f"cleam: unknown tweak {', '.join(unknown)} (see `cleam debloat list`)")
+    chosen = [by_id[i] for i in ids]
+    if recommended:
+        chosen += [t for t in debloat.recommended(debloat.current_env()) if t not in chosen]
+    return chosen
+
+
+def cmd_debloat(args) -> int:
+    if OS != "windows":
+        print("cleam: debloat is for Windows 10 and 11.", file=sys.stderr)
+        return 2
+    engine = debloat.Debloater()
+    if args.action == "list":
+        states = engine.states()
+        rows = [{**{k: v for k, v in debloat.as_dict(t).items() if k in ("id", "group", "title", "about", "default",
+                                                                           "risk", "restart")},
+                 "state": states[t.id], "unavailable": debloat.availability(t, engine.env)} for t in debloat.TWEAKS]
+        if args.json:
+            print(json.dumps({"tweaks": rows, "apps": [{"id": a.id, "name": a.name, "default": a.default}
+                                                        for a, _ in engine.removable_apps()],
+                              "changed": engine.applied()}, indent=2))
+            return 0
+        group = ""
+        for r in rows:
+            if r["group"] != group:
+                group = r["group"]
+                print(f"\n{group}")
+            mark = "*" if r["default"] else " "
+            print(f"  {mark} {r['id']:<24}{r['state']:<13}{r['unavailable'] or r['title']}")
+        apps_left = engine.removable_apps()
+        if apps_left:
+            print("\nRemovable apps: " + ", ".join(a.id for a, _ in apps_left))
+        print("\n* = recommended.  cleam debloat apply --recommended   /   cleam debloat undo --all")
+        return 0
+    if args.action == "apply":
+        tweaks = _pick(args.ids, args.recommended)
+        if not tweaks:
+            print("cleam: name tweaks to apply, or --recommended", file=sys.stderr)
+            return 2
+        if not args.yes:
+            for t in tweaks:
+                print(f"  {t.id:<24}{t.title}")
+            if input(f"Apply {len(tweaks)} changes? [y/N] ").strip().lower() != "y":
+                return 1
+        if args.snapshot and not _snapshot("Cleam: before debloat"):
+            print("cleam: snapshot failed, nothing changed", file=sys.stderr)
+            return 1
+        results = [engine.apply(t) for t in tweaks]
+    elif args.action == "revert":
+        results = [engine.revert(t) for t in _pick(args.ids, False)]
+    else:  # undo
+        changed = engine.applied()
+        ids = list(changed["tweaks"]) if args.all else args.ids
+        results = [engine.undo(i) for i in ids]
+    failed = 0
+    for out in results:
+        failed += not out.ok
+        print(f"  {'ok  ' if out.ok else 'FAIL'} {out.id}" + ("" if out.ok else f": {out.message}"))
+    restarts = sorted({o.restart for o in results if o.ok and o.restart})
+    if restarts:
+        print(f"Takes effect after: {', '.join(restarts)}.")
+    return 1 if failed else 0
+
+
 def main(argv: list[str] | None = None) -> int:
     args = parser().parse_args(argv)
+    if args.command is None:  # bare `cleam`: the menu, when there is someone to use it
+        return cmd_menu(args)
     return args.fn(args)

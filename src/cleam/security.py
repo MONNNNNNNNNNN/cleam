@@ -30,16 +30,19 @@ from pathlib import Path
 
 from .system import NO_WINDOW, OS
 
-OK, WARN, BAD, UNKNOWN = "ok", "warn", "bad", "unknown"
+OK, WARN, BAD, UNKNOWN, INFO = "ok", "warn", "bad", "unknown", "info"
+CHECK_GROUPS = ("Protection", "Updates", "Hardware security", "Network exposure", "Health", "Gaming")
+WIN10_ESU_END = (2027, 10, 12)  # Microsoft: consumer ESU "through October 12, 2027"
 
 
 @dataclass
 class Check:
     id: str
     label: str
-    state: str  # ok | warn | bad | unknown
+    state: str  # ok | warn | bad | unknown | info (a fact with a trade-off, not a verdict)
     detail: str
     fix: str = ""
+    group: str = "Protection"
 
 
 def _powershell(script: str, timeout: int = 60) -> str:
@@ -83,6 +86,42 @@ try { $r.shadows = @(Get-CimInstance Win32_ShadowCopy -ErrorAction Stop).Count }
 $r.firewall = @(Get-NetFirewallProfile -ErrorAction SilentlyContinue |
   ForEach-Object { [ordered]@{ name = "$($_.Name)"; on = ("$($_.Enabled)" -eq 'True') } })
 $r.uac = (Get-ItemProperty 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Policies\System' -ErrorAction SilentlyContinue).EnableLUA
+# --- updates
+$cv = Get-ItemProperty 'HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion' -ErrorAction SilentlyContinue
+$r.build = [int]$cv.CurrentBuild
+$hf = Get-HotFix -ErrorAction SilentlyContinue | Where-Object InstalledOn | Sort-Object InstalledOn -Descending | Select-Object -First 1
+$r.last_update = if ($hf) { $hf.InstalledOn.ToString('yyyy-MM-dd') } else { $null }
+$r.last_update_id = if ($hf) { "$($hf.HotFixID)" } else { $null }
+$r.reboot_pending = (Test-Path 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\WindowsUpdate\Auto Update\RebootRequired') -or
+  (Test-Path 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Component Based Servicing\RebootPending')
+# --- hardware security
+try { $r.secureboot = [bool](Confirm-SecureBootUEFI -ErrorAction Stop) } catch { $r.secureboot = $null }
+try { $t = Get-Tpm -ErrorAction Stop; $r.tpm = [ordered]@{ present = [bool]$t.TpmPresent; ready = [bool]$t.TpmReady } } catch { $r.tpm = $null }
+try { $b = Get-BitLockerVolume -MountPoint $env:SystemDrive -ErrorAction Stop
+  $r.bitlocker = [ordered]@{ status = "$($b.VolumeStatus)"; protection = "$($b.ProtectionStatus)" } } catch { $r.bitlocker = $null }
+$dg = Get-ItemProperty 'HKLM:\SYSTEM\CurrentControlSet\Control\DeviceGuard\Scenarios\HypervisorEnforcedCodeIntegrity' -ErrorAction SilentlyContinue
+$r.hvci = if ($dg -and $null -ne $dg.Enabled) { [int]$dg.Enabled } else { 0 }
+$r.battery = @(Get-CimInstance Win32_Battery -ErrorAction SilentlyContinue).Count
+# --- network exposure
+try { $r.smb1 = [bool](Get-SmbServerConfiguration -ErrorAction Stop).EnableSMB1Protocol } catch { $r.smb1 = $null }
+$r.rdp_deny = (Get-ItemProperty 'HKLM:\SYSTEM\CurrentControlSet\Control\Terminal Server' -ErrorAction SilentlyContinue).fDenyTSConnections
+$r.rdp_nla = (Get-ItemProperty 'HKLM:\SYSTEM\CurrentControlSet\Control\Terminal Server\WinStations\RDP-Tcp' -ErrorAction SilentlyContinue).UserAuthentication
+try { $r.guest = [bool](Get-LocalUser -ErrorAction Stop | Where-Object { $_.SID -like '*-501' }).Enabled } catch { $r.guest = $null }
+# --- health
+try { $r.disks = @(Get-PhysicalDisk -ErrorAction Stop | ForEach-Object {
+  $c = $_ | Get-StorageReliabilityCounter -ErrorAction SilentlyContinue
+  [ordered]@{ name = "$($_.FriendlyName)"; media = "$($_.MediaType)"; health = "$($_.HealthStatus)";
+    wear = if ($c) { $c.Wear } else { $null }; temp = if ($c) { $c.Temperature } else { $null } } }) } catch { $r.disks = $null }
+$since = (Get-Date).AddDays(-30)
+try { $r.crashes = @(Get-WinEvent -FilterHashtable @{ LogName = 'System'; Id = 41, 1001, 6008; StartTime = $since } -ErrorAction Stop |
+  Group-Object Id | ForEach-Object { [ordered]@{ id = [int]$_.Name; count = $_.Count } }) } catch { $r.crashes = @() }
+try { $r.bad_devices = @(Get-PnpDevice -PresentOnly -Status ERROR -ErrorAction Stop | ForEach-Object { "$($_.FriendlyName)" } | Where-Object { $_ }) } catch { $r.bad_devices = $null }
+$r.uptime_h = [int]((Get-Date) - (Get-CimInstance Win32_OperatingSystem).LastBootUpTime).TotalHours
+# --- gaming
+$gb = Get-ItemProperty 'HKCU:\Software\Microsoft\GameBar' -ErrorAction SilentlyContinue
+$r.game_mode = if ($gb -and $null -ne $gb.AutoGameModeEnabled) { [int]$gb.AutoGameModeEnabled } else { 1 }
+$r.hags = (Get-ItemProperty 'HKLM:\SYSTEM\CurrentControlSet\Control\GraphicsDrivers' -ErrorAction SilentlyContinue).HwSchMode
+$r.power = ((powercfg /getactivescheme) -join ' ') -replace '.*([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}).*', '$1'
 $r | ConvertTo-Json -Depth 4 -Compress
 """
 
@@ -96,7 +135,7 @@ def av_state(product_state: int) -> tuple[bool, bool]:
     return bool((product_state >> 12) & 1), bool(product_state & 0x10)
 
 
-def windows_checks(raw: dict) -> list[Check]:
+def windows_checks(raw: dict, today=None) -> list[Check]:
     """Turn the raw status into checks. Pure, so every branch is testable off Windows."""
     checks: list[Check] = []
     avs = _as_list(raw.get("av"))
@@ -157,12 +196,133 @@ def windows_checks(raw: dict) -> list[Check]:
         checks.append(Check("uac", "User Account Control", OK if uac == 1 else BAD,
                             "On." if uac == 1 else "Off: every program runs with full rights, unasked.",
                             "" if uac == 1 else "Turn UAC back on (EnableLUA = 1) and restart."))
-    return checks
+    return checks + system_checks(raw, today)
+
+
+def system_checks(raw: dict, today=None) -> list[Check]:
+    """Updates, hardware security, exposure, health and gaming. Pure, like windows_checks."""
+    import datetime as dt
+
+    today = today or dt.date.today()
+    out: list[Check] = []
+
+    def add(group: str, *args, **kw) -> None:
+        out.append(Check(*args, group=group, **kw))
+
+    # ---- updates
+    build = raw.get("build") or 0
+    last = raw.get("last_update")
+    if last:
+        days = (today - dt.date.fromisoformat(last)).days
+        state = BAD if days > 90 else WARN if days > 45 else OK
+        add("Updates", "last-update", "Last Windows update", state,
+            f"{last} ({raw.get('last_update_id') or 'update'}), {days} days ago.",
+            "" if state == OK else "Settings > Windows Update > Check for updates. Security fixes arrive monthly.")
+    if build and build < 22000:
+        end = dt.date(*WIN10_ESU_END)
+        state = BAD if today > end else INFO
+        add("Updates", "windows-10-support", "Windows 10 support", state,
+            "Windows 10 support ended on 14 Oct 2025. Security updates now come only through Extended Security "
+            f"Updates (ESU), until {end:%d %b %Y}." if state == INFO else "Windows 10 ESU has ended: no more security updates.",
+            "Enroll in ESU (Settings > Windows Update) if updates stopped, or move to Windows 11 when the PC allows.")
+    if raw.get("reboot_pending"):
+        add("Updates", "reboot", "Restart pending", WARN, "An update is waiting for a restart to finish installing.",
+            "Restart when convenient: until then the fix is not active.")
+    # ---- hardware security
+    sb = raw.get("secureboot")
+    add("Hardware security", "secure-boot", "Secure Boot", OK if sb else WARN if sb is False else UNKNOWN,
+        "On." if sb else "Off: a boot-level rootkit could load before Windows. Battlefield 6 (EA Javelin) and, "
+        "on Windows 11, Valorant refuse to start without it." if sb is False else
+        "Not reported: legacy BIOS mode, or Cleam is not running as administrator.",
+        "" if sb else "Turn on Secure Boot in the UEFI/BIOS setup (the disk must use GPT).")
+    tpm = raw.get("tpm")
+    if isinstance(tpm, dict):
+        ok = tpm.get("present") and tpm.get("ready")
+        add("Hardware security", "tpm", "TPM", OK if ok else WARN,
+            "Present and ready." if ok else "Missing or not ready: BitLocker and Windows 11 need it.",
+            "" if ok else "Enable fTPM (AMD) or PTT (Intel) in the UEFI setup.")
+    bl = raw.get("bitlocker")
+    if isinstance(bl, dict):
+        on = bl.get("protection") == "On"
+        laptop = bool(raw.get("battery"))
+        add("Hardware security", "encryption", "Drive encryption (C:)", OK if on else WARN if laptop else INFO,
+            "BitLocker is protecting C:." if on else "C: is not encrypted: anyone with the disk can read it."
+            + (" On a laptop that can be stolen, that matters." if laptop else ""),
+            "" if on else "Settings > Privacy & security > Device encryption, or BitLocker (Pro).")
+    if raw.get("hvci") is not None:
+        on = raw.get("hvci") == 1
+        add("Hardware security", "memory-integrity", "Memory integrity", OK if on else INFO,
+            "On: malicious or vulnerable drivers are blocked." if on else "Off. Microsoft notes it can cost "
+            "performance in some games, but it blocks malicious and vulnerable drivers.",
+            "" if on else "Windows Security > Device security > Core isolation, if you value protection over FPS.")
+    # ---- network exposure
+    if raw.get("smb1") is not None:
+        add("Network exposure", "smb1", "SMBv1", BAD if raw["smb1"] else OK,
+            "SMBv1 is ON: the protocol WannaCry spread through." if raw["smb1"] else "Off.",
+            "Turn off: Disable-WindowsOptionalFeature -Online -FeatureName SMB1Protocol" if raw["smb1"] else "")
+    deny = raw.get("rdp_deny")
+    if deny is not None:
+        if deny == 1:
+            add("Network exposure", "rdp", "Remote Desktop", OK, "Off.")
+        else:
+            nla = raw.get("rdp_nla") == 1
+            add("Network exposure", "rdp", "Remote Desktop", WARN if nla else BAD,
+                "On, with Network Level Authentication." if nla else
+                "On WITHOUT Network Level Authentication: anyone reaching port 3389 gets a login screen.",
+                "Turn it off if you don't use it (Settings > System > Remote Desktop)." if nla
+                else "Require Network Level Authentication, or turn Remote Desktop off.")
+    if raw.get("guest"):
+        add("Network exposure", "guest", "Guest account", WARN, "Enabled.", "net user guest /active:no")
+    # ---- health
+    for disk in _as_list(raw.get("disks")):
+        name = disk.get("name") or "Disk"
+        problems = []
+        if disk.get("health") not in (None, "", "Healthy"):
+            problems.append(f"Windows reports it {disk['health']}")
+        if isinstance(disk.get("wear"), int) and disk["wear"] >= 90:
+            problems.append(f"{disk['wear']}% worn")
+        if isinstance(disk.get("temp"), int) and disk["temp"] >= 60:
+            problems.append(f"{disk['temp']} °C")
+        state = BAD if disk.get("health") not in (None, "", "Healthy") else WARN if problems else OK
+        temp = f", {disk['temp']} °C" if isinstance(disk.get("temp"), int) and disk["temp"] > 0 else ""
+        add("Health", "disk", f"Disk: {name}", state,
+            ("; ".join(problems) + ".") if problems else f"Healthy ({disk.get('media') or 'disk'}{temp}).",
+            "Back up this disk now and plan to replace it." if state == BAD else "")
+    crashes = {int(c.get("id", 0)): int(c.get("count", 0)) for c in _as_list(raw.get("crashes"))}
+    bsod, power = crashes.get(1001, 0), crashes.get(41, 0) + crashes.get(6008, 0)
+    add("Health", "crashes", "Crashes (30 days)", WARN if bsod or power else OK,
+        f"{bsod} blue screen(s), {power} unexpected shutdown(s)." if bsod or power else "None.",
+        "Look for a pattern: a new driver, overheating, unstable overclock or power supply." if bsod or power else "")
+    bad = _as_list(raw.get("bad_devices"))
+    if raw.get("bad_devices") is not None:
+        add("Health", "devices", "Devices", WARN if bad else OK,
+            f"Reporting a problem: {', '.join(bad)}." if bad else "No device reports a problem.",
+            "Device Manager: update or reinstall the driver; a device switched off by a tweak shows here too."
+            if bad else "")
+    uptime = raw.get("uptime_h")
+    if isinstance(uptime, int) and uptime >= 168:
+        add("Health", "uptime", "Uptime", INFO, f"{uptime // 24} days since the last restart.",
+            "Restart now and then: updates and driver resets finish only on a restart.")
+    # ---- gaming
+    add("Gaming", "game-mode", "Game Mode", OK if raw.get("game_mode", 1) else WARN,
+        "On." if raw.get("game_mode", 1) else "Off: Windows Update and background work may interrupt games.",
+        "" if raw.get("game_mode", 1) else "Turn it on in Debloat > Gaming & comfort.")
+    hags = raw.get("hags")
+    if hags is not None:
+        add("Gaming", "hags", "GPU scheduling (HAGS)", INFO, "On." if hags == 2 else "Off.",
+            "" if hags == 2 else "Settings > Display > Graphics; needs a supporting GPU and driver.")
+    power = (raw.get("power") or "").lower()
+    if power:
+        balanced = power in ("381b4222-f694-41f0-9685-ff5bb260df2e", "a1841308-3541-4fab-bc81-f71556f20b4a")
+        add("Gaming", "power-plan", "Power plan", INFO,
+            "Balanced or power saver: clocks drop between frames." if balanced else "A performance plan is active.",
+            "Debloat > Gaming & comfort > High performance power plan." if balanced else "")
+    return out
 
 
 def status() -> list[Check]:
     if OS == "windows":
-        out = _powershell(STATUS_SCRIPT)
+        out = _powershell(STATUS_SCRIPT, timeout=180)
         try:
             raw = json.loads(out) if out.strip() else None
         except ValueError:
