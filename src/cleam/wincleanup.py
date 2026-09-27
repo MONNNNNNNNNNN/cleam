@@ -13,6 +13,7 @@ target names, and removes the values again afterwards.
 from __future__ import annotations
 
 import json
+import ntpath
 import os
 import subprocess
 from pathlib import Path
@@ -67,7 +68,7 @@ def superseded(drivers: list[dict]) -> list[dict]:
     """
     groups: dict[tuple[str, str, str], list[dict]] = {}
     for d in drivers:
-        inf = os.path.basename(str(d.get("OriginalFileName") or "")).lower()
+        inf = ntpath.basename(str(d.get("OriginalFileName") or "")).lower()  # a Windows path, on any OS
         if not inf:
             continue
         key = (inf, str(d.get("ProviderName") or ""), str(d.get("ClassName") or ""))

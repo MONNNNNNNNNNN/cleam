@@ -257,6 +257,17 @@ class Revert(unittest.TestCase):
         self.make(FakeRegistry(), tasks).revert(t)
         self.assertTrue(all(s == 3 for s in tasks.s.values()))
 
+    def test_game_mode_reads_on_when_windows_never_wrote_the_value(self):
+        # A PC nobody touched has no AutoGameModeEnabled, and Game Mode is on.
+        self.assertEqual(self.make(FakeRegistry()).state(tweak("game-mode")), "applied")
+
+    def test_a_key_left_empty_by_revert_is_removed(self):
+        t = tweak("explorer-home-gallery")
+        reg = FakeRegistry({(r.hive, r.key, r.name): (r.kind, r.value) for r in t.reg})
+        self.make(reg).revert(t)
+        for r in t.reg:
+            self.assertFalse(reg.key_exists(r.hive, r.key), r.key)  # no blank Home left behind
+
     def test_an_action_is_reset(self):
         action = FakeAction(applied=True)
         self.make(FakeRegistry(), actions={"reserved-storage": action}).revert(tweak("reserved-storage"))

@@ -55,6 +55,10 @@ class Reg:
     # change Cleam did not make (so the journal has no before-value): None
     # means the value is simply absent, which is true of every policy.
     original: int | str | None = None
+    # How Windows behaves when the value is absent, if that equals a value:
+    # Game Mode is on with AutoGameModeEnabled missing, so a PC nobody touched
+    # must read "on", not "off".
+    when_absent: int | str | None = None
 
 
 def service(name: str, start: int, original: int) -> Reg:
@@ -311,7 +315,7 @@ TWEAKS: tuple[Tweak, ...] = (
     # ------------------------------------------------------------ Taskbar & Explorer
     Tweak("file-extensions", "Taskbar & Explorer", "Show file extensions",
           "Shows .exe, .pdf, .docx... in File Explorer, so 'invoice.pdf.exe' can no longer pass for a PDF.",
-          (Reg(HKCU, ADV, "HideFileExt", 0),), default=True, restart="explorer"),
+          (Reg(HKCU, ADV, "HideFileExt", 0, original=1),), default=True, restart="explorer"),
     Tweak("widgets", "Taskbar & Explorer", "Turn off Widgets / News and interests",
           "Removes the news and weather feed from the taskbar.",
           (Reg(HKLM, r"SOFTWARE\Policies\Microsoft\Dsh", "AllowNewsAndInterests", 0),
@@ -353,8 +357,8 @@ TWEAKS: tuple[Tweak, ...] = (
     Tweak("game-mode", "Gaming & comfort", "Game Mode on",
           "Windows gives the game priority and holds back Windows Update installs and driver prompts while you "
           "play. It is on by default; this turns it back on if something switched it off.",
-          (Reg(HKCU, r"Software\Microsoft\GameBar", "AutoGameModeEnabled", 1),
-           Reg(HKCU, r"Software\Microsoft\GameBar", "AllowAutoGameMode", 1)), default=True),
+          (Reg(HKCU, r"Software\Microsoft\GameBar", "AutoGameModeEnabled", 1, when_absent=1),
+           Reg(HKCU, r"Software\Microsoft\GameBar", "AllowAutoGameMode", 1, when_absent=1)), default=True),
     Tweak("windowed-games", "Gaming & comfort", "Optimizations for windowed games",
           "DirectX 10/11 games in windowed or borderless mode use the flip model: lower input latency, and "
           "variable refresh rate and Auto HDR start working (Microsoft). Other graphics settings are kept.",
@@ -698,7 +702,8 @@ class Debloater:
         checks: list[bool] = []
         for r in self._applicable(tweak):
             got = self.registry.get(r.hive, r.key, r.name)
-            checks.append(got is not None and got[1] == r.value)
+            value = got[1] if got is not None else r.when_absent
+            checks.append(value is not None and value == r.value)
         if tweak.tasks:
             states = task_states if task_states is not None else self.tasks.states(list(tweak.tasks))
             checks += [states.get(t, -1) == 1 for t in tweak.tasks if states.get(t, -1) != -1]
@@ -816,6 +821,9 @@ class Debloater:
             try:
                 if r.original is None:
                     self.registry.delete_value(r.hive, r.key, r.name)
+                    # An empty per-user CLSID key still hides the machine-wide
+                    # one (a blank Home in Explorer): a key left empty goes too.
+                    self.registry.delete_empty_key(r.hive, r.key)
                 else:
                     self.registry.set(r.hive, r.key, r.name, r.kind, r.original)
             except OSError as e:

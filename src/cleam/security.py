@@ -19,6 +19,7 @@ Defender's own scan; removing what it finds is Defender's job.
 from __future__ import annotations
 
 import json
+import ntpath
 import os
 import re
 import shutil
@@ -524,7 +525,9 @@ SCRIPT_HOSTS = ("wscript.exe", "cscript.exe", "mshta.exe", "regsvr32.exe")
 
 def program_of(command: str) -> str:
     """The executable a Run-key command line starts, with %VARS% expanded."""
-    command = os.path.expandvars(command.strip())
+    # %VAR% by hand: os.path.expandvars leaves %VAR% alone off Windows, and
+    # these are always Windows command lines.
+    command = re.sub(r"%([^%]+)%", lambda m: os.environ.get(m.group(1), m.group(0)), command.strip())
     if command.startswith('"'):
         end = command.find('"', 1)
         return command[1:end] if end > 0 else command[1:]
@@ -555,7 +558,7 @@ def judge(item: StartupItem, env: dict[str, str] | None = None) -> list[str]:
         reasons.append("runs from Downloads")
     for var in ("APPDATA", "LOCALAPPDATA", "ProgramData"):
         base = (env.get(var) or "").lower().rstrip("\\")
-        if base and os.path.dirname(low) == base:
+        if base and ntpath.dirname(low) == base:
             reasons.append(f"program sits loose in %{var}%, not in a program folder")
     if any(host in cmd for host in SCRIPT_HOSTS):
         reasons.append("starts a script host")
