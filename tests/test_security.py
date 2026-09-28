@@ -273,11 +273,11 @@ class DriverPackages(unittest.TestCase):
 
 class TasksAndServices(unittest.TestCase):
     def setUp(self):
-        # A Windows folder whose programs exist, so judge() has nothing to say about them.
-        self.windir = tempfile.mkdtemp()
-        os.makedirs(os.path.join(self.windir, "System32"))
-        self.defrag = os.path.join(self.windir, "System32", "defrag.exe")
-        Path(self.defrag).write_bytes(b"MZ")
+        # A "Windows folder" whose program exists, so judge() has nothing to say
+        # about it: the interpreter's own. Not a temp dir -- on Windows that is
+        # under AppData\Local\Temp, and judge() rightly flags programs there.
+        self.windir = os.path.dirname(sys.executable)
+        self.defrag = sys.executable
         self.env = {"SystemRoot": self.windir, "ProgramFiles": r"C:\Program Files",
                     "LOCALAPPDATA": r"C:\Users\u\AppData\Local", "TEMP": r"C:\Users\u\AppData\Local\Temp"}
 
@@ -354,7 +354,8 @@ class TasksAndServices(unittest.TestCase):
 
     def test_an_unreadable_signature_hides_a_windows_service_rather_than_offer_it(self):
         spooler = s.StartupItem("Print Spooler", "", "Service", self.defrag, kind="service", key="Spooler")
-        vendor = s.StartupItem("Steam Client Service", "", "Service", sys.executable, kind="service", key="Steam")
+        vendor = s.StartupItem("Steam Client Service", "", "Service", r"C:\Steam\steamservice.exe", kind="service",
+                               key="Steam")
         self.assertEqual([i.key for i in s.hide_microsoft([spooler, vendor], self.env)], ["Steam"])
 
     def test_malware_cannot_hide_behind_a_protective_name(self):
