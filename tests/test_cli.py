@@ -75,3 +75,52 @@ class Human(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class Startup(unittest.TestCase):
+    TASK = "\\GoogleUpdaterTaskSystem142.0"
+
+    def setUp(self):
+        from cleam import repair, security
+
+        items = [security.StartupItem("GoogleUpdaterTaskSystem142.0", "updater.exe", "Scheduled task",
+                                      kind="task", key=self.TASK),
+                 security.StartupItem("Malwarebytes Service", "mb.exe", "Service", kind="service", key="MBAMService")]
+        patches = [mock.patch.object(security, "startup", return_value=items),
+                   mock.patch("cleam.debloat.load_journal", return_value={"tweaks": {}, "apps": {}}),
+                   mock.patch.object(repair, "run", return_value=(True, "done"))]
+        for p in patches:
+            p.start()
+            self.addCleanup(p.stop)
+        self.ran = repair.run
+
+    def run_cli(self, *argv):
+        out = io.StringIO()
+        with contextlib.redirect_stdout(out):
+            code = cli.main(list(argv))
+        return code, out.getvalue()
+
+    def test_list_shows_ids(self):
+        code, out = self.run_cli("startup")
+        self.assertEqual(code, 0)
+        self.assertIn(f"id: task:{self.TASK}", out)
+
+    def test_off_without_yes_is_a_dry_run(self):
+        code, out = self.run_cli("startup", "--off", f"task:{self.TASK}")
+        self.assertEqual(code, 0)
+        self.assertIn(f"scheduled task {self.TASK}: Disabled", out)
+        self.assertIn("dry run", out)
+        self.ran.assert_not_called()
+
+    def test_off_yes_runs_the_fix(self):
+        code, out = self.run_cli("startup", "--off", f"TASK:{self.TASK.lower()}", "--yes")  # ids ignore case
+        self.assertEqual(code, 0)
+        self.ran.assert_called_once()
+
+    def test_protective_and_unknown_entries_are_refused(self):
+        with self.assertRaises(SystemExit) as e:
+            self.run_cli("startup", "--off", "service:MBAMService", "--yes")
+        self.assertIn("protective", str(e.exception))
+        with self.assertRaises(SystemExit):
+            self.run_cli("startup", "--off", "task:\\nope")
+        self.ran.assert_not_called()

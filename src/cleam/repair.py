@@ -247,13 +247,53 @@ def fixes_for(check: security.Check) -> list[Fix]:
     return []
 
 
-def startup_fixes(item: security.StartupItem) -> list[Fix]:
-    """Task Manager's own switch: StartupApproved, so Task Manager shows it and can turn it back on."""
+TURN_OFF, TURN_ON = "Turn off at startup", "Turn back on"
+
+
+def startup_tweak(item: security.StartupItem) -> Tweak | None:
+    """A scheduled task or service switched off through the debloat engine, so
+    its state is journalled first and Undo debloat (or Turn back on) restores
+    exactly that. A service goes to manual, not disabled: it stops starting
+    with Windows, but a program that needs it can still start it."""
+    if item.kind == "task":
+        return Tweak(f"startup-task-{item.key}", "Startup", f"Startup: task {item.name} off",
+                     f"Scheduled task {item.key} disabled.", tasks=(item.key,))
+    if item.kind == "service":
+        return Tweak(f"startup-service-{item.key}", "Startup", f"Startup: service {item.name} to manual",
+                     f"Service {item.key} no longer starts with Windows.", (service(item.key, 3, 2),))
+    return None
+
+
+def startup_fixes(item: security.StartupItem, journal: dict | None = None) -> list[Fix]:
+    """Switch one startup entry off, or back on when Cleam switched it off.
+
+    Run keys and Startup folders use Task Manager's own switch
+    (StartupApproved), so Task Manager shows it and can turn it back on.
+    Tasks and services go through the journal. Nothing protective (an
+    antivirus, a firewall, a backup agent) is ever offered."""
+    if item.protective:
+        return []
+    tweak = startup_tweak(item)
+    if tweak:
+        if item.enabled:
+            updater = "update" in f"{item.name} {item.key}".lower()
+            return [Fix(TURN_OFF, CHANGE, tuple(debloat.tech(tweak)), tweak=tweak,
+                        about=f"{item.name} stops starting by itself." + (
+                            " A service set to manual still starts when a program asks for it."
+                            if item.kind == "service" else ""),
+                        warn="This keeps a program up to date: switched off, it updates only when you open it, "
+                             "so security fixes can arrive later." if updater else "")]
+        journal = journal if journal is not None else debloat.load_journal()
+        if tweak.id in journal["tweaks"]:
+            return [Fix(TURN_ON, RUN, (f"put back what the journal recorded for {item.key}",),
+                        call=lambda: debloat.Debloater().undo(tweak.id).message,
+                        about=f"Cleam switched {item.name} off; this restores it exactly as it was.")]
+        return []
     where = approved_key(item)
     if not item.enabled or not where:
         return []
     hive, key = where
-    return [Fix("Turn off at startup", RUN, (f"{hive}\\{key}  {item.name} = 03 00 00 00 <time> (disabled)",),
+    return [Fix(TURN_OFF, RUN, (f"{hive}\\{key}  {item.name} = 03 00 00 00 <time> (disabled)",),
                 call=lambda: security.set_startup_enabled(item, False), admin=hive == HKLM,
                 undo="Task Manager > Startup > Enable")]
 

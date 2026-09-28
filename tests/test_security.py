@@ -271,5 +271,105 @@ class DriverPackages(unittest.TestCase):
         self.assertIn("'Device Driver Packages'", script)
 
 
+class TasksAndServices(unittest.TestCase):
+    def setUp(self):
+        # A Windows folder whose programs exist, so judge() has nothing to say about them.
+        self.windir = tempfile.mkdtemp()
+        os.makedirs(os.path.join(self.windir, "System32"))
+        self.defrag = os.path.join(self.windir, "System32", "defrag.exe")
+        Path(self.defrag).write_bytes(b"MZ")
+        self.env = {"SystemRoot": self.windir, "ProgramFiles": r"C:\Program Files",
+                    "LOCALAPPDATA": r"C:\Users\u\AppData\Local", "TEMP": r"C:\Users\u\AppData\Local\Temp"}
+
+    def test_a_vendor_task_is_listed_with_when_it_runs(self):
+        rows = [{"path": "\\GoogleUpdaterTaskSystem142.0", "state": 3,
+                 "exec": '"C:\\Program Files (x86)\\Google\\GoogleUpdater\\updater.exe"', "args": "--wake",
+                 "triggers": ["LogonTrigger", "DailyTrigger", "DailyTrigger"]}]
+        [item] = s.task_items(rows, self.env)
+        self.assertEqual((item.kind, item.key, item.name), ("task", rows[0]["path"], "GoogleUpdaterTaskSystem142.0"))
+        self.assertEqual(item.location, "Scheduled task (at sign-in, daily)")
+        self.assertEqual(item.path, r"C:\Program Files (x86)\Google\GoogleUpdater\updater.exe")
+        self.assertTrue(item.enabled)
+        self.assertEqual(item.id, "task:\\GoogleUpdaterTaskSystem142.0")
+
+    def test_disabled_state_and_powershell_unwrapping(self):
+        # ConvertTo-Json turns a one-element list into the element itself.
+        row = {"path": "\\Opera scheduled Autoupdate", "state": 1, "exec": r"C:\Opera\launcher.exe",
+               "triggers": "TimeTrigger"}
+        [item] = s.task_items(row, self.env)
+        self.assertFalse(item.enabled)
+        self.assertEqual(item.location, "Scheduled task (on a schedule)")
+
+    def test_windows_own_tasks_are_hidden_but_an_odd_one_in_their_folder_is_not(self):
+        rows = [
+            {"path": "\\Microsoft\\Windows\\Defrag\\ScheduledDefrag", "state": 3, "exec": self.defrag},
+            {"path": "\\Microsoft\\Windows\\Shell\\CreateObjectTask", "state": 3, "clsid": "{8F8C8B7B-...}"},
+            # A fake Windows task: the classic hiding place.
+            {"path": "\\Microsoft\\Windows\\Maintenance\\Sync", "state": 3,
+             "exec": r"C:\Users\u\AppData\Local\sync.exe"},
+            {"path": "\\Microsoft\\Windows\\Wininet\\Cache", "state": 3, "exec": self.defrag,
+             "args": "& powershell -w hidden -enc SQBFAFgA"},
+            {"path": "\\Vendor\\Helper", "state": 3, "clsid": "{1234}"},
+            {"path": "\\Nothing to run", "state": 3},
+        ]
+        names = [i.name for i in s.task_items(rows, self.env)]
+        self.assertEqual(names, ["Sync", "Cache", "Helper"])
+
+    def test_services_outside_windows_are_listed_svchost_ones_are_not(self):
+        rows = [
+            {"name": "Dnscache", "display": "DNS Client", "mode": "Auto",
+             "path": os.path.join(self.windir, "system32", "svchost.exe") + " -k NetworkService"},
+            {"name": "NVDisplay.ContainerLocalSystem", "display": "NVIDIA Display Container LS", "mode": "Auto",
+             "delayed": True, "path": '"C:\\Windows\\System32\\DriverStore\\nvlt.inf\\NVDisplay.Container.exe" -s'},
+            {"name": "AdobeARMservice", "display": "Adobe Acrobat Update Service", "mode": "Manual",
+             "path": '"C:\\Program Files (x86)\\Common Files\\Adobe\\ARM\\1.0\\armsvc.exe"'},
+            {"name": "gupdate", "display": "Google Updater", "mode": "Manual", "path": r"C:\G\updater.exe"},
+        ]
+        items = s.service_items(rows, self.env, cleam_off={"gupdate"})
+        self.assertEqual([(i.key, i.enabled) for i in items],
+                         [("NVDisplay.ContainerLocalSystem", True), ("gupdate", False)])
+        self.assertEqual(items[0].location, "Service (delayed start)")
+        self.assertEqual(items[0].path, r"C:\Windows\System32\DriverStore\nvlt.inf\NVDisplay.Container.exe")
+
+    def test_an_unquoted_service_path_with_spaces_is_flagged(self):
+        cmd = r"C:\Program Files\Vendor App\svc.exe -run"
+        item = s.StartupItem("svc", cmd, "Service", s.program_of(cmd), kind="service", key="svc")
+        self.assertIn("unquoted", " ".join(s.judge(item, self.env)))
+        quoted = s.StartupItem("svc", f'"{s.program_of(cmd)}" -run', "Service", s.program_of(cmd), kind="service")
+        self.assertNotIn("unquoted", " ".join(s.judge(quoted, self.env)))
+
+    def test_microsoft_signed_services_hide_microsoft_signed_root_tasks_stay(self):
+        ms = dict(signed="Valid", publisher="Microsoft Corporation")
+        items = [
+            s.StartupItem("Edge Update Service", "x", "Service", sys.executable, kind="service", key="edgeupdate", **ms),
+            s.StartupItem("MicrosoftEdgeUpdateTaskMachineCore", "x", "Scheduled task", sys.executable, kind="task",
+                          key="\\MicrosoftEdgeUpdateTaskMachineCore", **ms),
+            s.StartupItem("OfficeTelemetryAgentLogOn", "x", "Scheduled task", sys.executable, kind="task",
+                          key="\\Microsoft\\Office\\OfficeTelemetryAgentLogOn", **ms),
+            s.StartupItem("Steam Client Service", "x", "Service", sys.executable, kind="service", key="Steam",
+                          signed="Valid", publisher="Valve Corp."),
+        ]
+        self.assertEqual([i.name for i in s.hide_microsoft(items)],
+                         ["MicrosoftEdgeUpdateTaskMachineCore", "Steam Client Service"])
+
+    def test_an_unreadable_signature_hides_a_windows_service_rather_than_offer_it(self):
+        spooler = s.StartupItem("Print Spooler", "", "Service", self.defrag, kind="service", key="Spooler")
+        vendor = s.StartupItem("Steam Client Service", "", "Service", sys.executable, kind="service", key="Steam")
+        self.assertEqual([i.key for i in s.hide_microsoft([spooler, vendor], self.env)], ["Steam"])
+
+    def test_malware_cannot_hide_behind_a_protective_name(self):
+        fake = s.StartupItem("Windows Security Update", "", "HKCU\\Run", r"C:\Users\u\AppData\Local\Temp\wsu.exe",
+                             kind="run", reasons=["runs from the temp folder"])
+        self.assertFalse(fake.protective)
+        real = s.StartupItem("x", "", "Service", kind="service", key="WinDefend", reasons=["signature: Unknown"])
+        self.assertTrue(real.protective)  # Defender's own services stay protected, flagged or not
+
+    def test_protective_software_is_recognised_and_reset_is_not_eset(self):
+        self.assertTrue(s.StartupItem("Malwarebytes Service", "", "Service", kind="service", key="MBAMService").protective)
+        self.assertTrue(s.StartupItem("x", "", "Service", kind="service", key="WinDefend").protective)
+        self.assertTrue(s.StartupItem("ESET Service", "", "Service", kind="service", key="ekrn").protective)
+        self.assertFalse(s.StartupItem("ResetHelper", "", "Scheduled task", r"C:\Tools\reset.exe").protective)
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -49,15 +49,19 @@ class Check:
 
 
 def _powershell(script: str, timeout: int = 60) -> str:
+    # UTF-8 both ways: PowerShell writes the OEM code page by default and Python
+    # would read ANSI, so a service named "Dienst für..." raised UnicodeDecodeError.
+    script = "[Console]::OutputEncoding = [Text.Encoding]::UTF8; " + script
     try:
         return subprocess.run(
             ["powershell", "-NoProfile", "-NonInteractive", "-Command", script],
             capture_output=True,
-            text=True,
+            encoding="utf-8",
+            errors="replace",
             timeout=timeout,
             stdin=subprocess.DEVNULL,
             creationflags=NO_WINDOW,
-        ).stdout
+        ).stdout.lstrip("﻿")  # a UTF-8 preamble would make json.loads fail
     except (OSError, subprocess.SubprocessError):
         return ""
 
@@ -665,10 +669,24 @@ class StartupItem:
     signed: str = ""  # Valid | NotSigned | HashMismatch | ... (Windows), "" if unknown
     publisher: str = ""
     reasons: list[str] = field(default_factory=list)
+    kind: str = ""  # run | folder | task | service | autostart | launchd
+    key: str = ""  # a task's full path, a service's name: what switches it
 
     @property
     def suspicious(self) -> bool:
         return bool(self.reasons)
+
+    @property
+    def id(self) -> str:
+        return f"{self.kind}:{self.key or self.name}"
+
+    @property
+    def protective(self) -> bool:
+        """An antivirus, firewall or backup agent: never offered for switching off.
+        A flagged entry is not protected by its name: malware calls itself
+        "Windows Security Update" precisely so it looks untouchable."""
+        return self.key in PROTECTED_SERVICES or (
+            not self.suspicious and bool(PROTECTIVE.search(f"{self.name} {self.path}")))
 
 
 RUN_KEYS = (
@@ -680,6 +698,16 @@ RUN_KEYS = (
     ("HKLM", r"Software\WOW6432Node\Microsoft\Windows\CurrentVersion\RunOnce"),
 )
 SCRIPT_HOSTS = ("wscript.exe", "cscript.exe", "mshta.exe", "regsvr32.exe")
+# Switching one of these off lowers protection, which Cleam never does.
+# A leading \b only: "protect" must match "Protection", "eset" must not match "reset".
+PROTECTIVE = re.compile(r"\b(anti-?virus|anti-?malware|malware|defender|firewall|security|endpoint|protect|backup"
+                        r"|sophos|kaspersky|eset|bitdefender|avast|avg|norton|mcafee|crowdstrike|sentinel|wazuh)",
+                        re.IGNORECASE)
+PROTECTED_SERVICES = {"WinDefend", "WdNisSvc", "Sense", "SecurityHealthService", "wscsvc", "mpssvc", "MDCoreSvc"}
+TASK_TRIGGERS = {"LogonTrigger": "at sign-in", "BootTrigger": "at startup", "SessionStateChangeTrigger": "at unlock",
+                 "IdleTrigger": "when idle", "EventTrigger": "on an event", "RegistrationTrigger": "when installed",
+                 "DailyTrigger": "daily", "WeeklyTrigger": "weekly", "MonthlyTrigger": "monthly",
+                 "TimeTrigger": "on a schedule"}
 
 
 def program_of(command: str) -> str:
@@ -727,6 +755,9 @@ def judge(item: StartupItem, env: dict[str, str] | None = None) -> list[str]:
         reasons.append("loads a DLL from a user-writable folder")
     if item.signed and item.signed not in ("Valid", "UnknownError") and low.endswith(".exe"):
         reasons.append("not signed by its publisher" if item.signed == "NotSigned" else f"signature: {item.signed}")
+    if item.kind == "service" and " " in path and not item.command.lstrip().startswith('"'):
+        # C:\Program Files\A B\x.exe unquoted: Windows tries C:\Program.exe first.
+        reasons.append("unquoted path with spaces: a program placed earlier on that path would run instead")
     return reasons
 
 
@@ -749,7 +780,7 @@ def _windows_startup() -> list[StartupItem]:
                     if not isinstance(value, str) or not value.strip():
                         continue
                     items.append(StartupItem(name, value, f"{hive}\\{key}", program_of(value),
-                                             enabled=approved.get(name.lower(), True)))
+                                             enabled=approved.get(name.lower(), True), kind="run"))
         except OSError:
             continue
     folders = [
@@ -763,9 +794,118 @@ def _windows_startup() -> list[StartupItem]:
         for entry in os.scandir(folder):
             if entry.is_file() and entry.name.lower() != "desktop.ini":
                 items.append(StartupItem(entry.name, entry.path, where, entry.path,
-                                         enabled=approved.get(entry.name.lower(), True)))
+                                         enabled=approved.get(entry.name.lower(), True), kind="folder"))
+    raw = _tasks_and_services()
+    env = dict(os.environ)
+    items += task_items(raw.get("tasks"), env)
+    items += service_items(raw.get("services"), env, _cleam_switched_off())
     _signatures(items)
+    return hide_microsoft(items)
+
+
+# One PowerShell call for both (its start-up is most of the cost). Only tasks
+# with a program to run, or a COM handler, and every service: the filtering is
+# Python, so it is tested off Windows. State and start mode are enum numbers
+# and invariant names, never translated text.
+TASKS_AND_SERVICES = r"""
+$tasks = @(Get-ScheduledTask -ErrorAction SilentlyContinue | ForEach-Object {
+  $a = @($_.Actions) | Select-Object -First 1
+  [ordered]@{ path = $_.TaskPath + $_.TaskName; state = [int]$_.State;
+    exec = "$($a.Execute)"; args = "$($a.Arguments)"; clsid = "$($a.ClassId)";
+    triggers = @($_.Triggers | ForEach-Object { $_.CimClass.CimClassName -replace '^MSFT_Task', '' }) } })
+$services = @(Get-CimInstance Win32_Service -ErrorAction SilentlyContinue | ForEach-Object {
+  [ordered]@{ name = $_.Name; display = $_.DisplayName; path = "$($_.PathName)"; mode = "$($_.StartMode)";
+    delayed = [bool]$_.DelayedAutoStart } })
+[ordered]@{ tasks = $tasks; services = $services } | ConvertTo-Json -Depth 4 -Compress
+"""
+
+
+def _tasks_and_services() -> dict:
+    try:
+        data = json.loads(_powershell(TASKS_AND_SERVICES, timeout=60) or "{}")
+    except ValueError:
+        return {}
+    return data if isinstance(data, dict) else {}
+
+
+def _cleam_switched_off() -> set[str]:
+    """Services Cleam set to manual: no longer automatic, but still listed so they can go back."""
+    from .debloat import load_journal
+
+    return {k.split("-", 2)[2] for k in load_journal()["tweaks"] if k.startswith("startup-service-")}
+
+
+def _under(path: str, *bases: str) -> bool:
+    norm = lambda p: p.lower().replace("/", "\\")  # noqa: E731
+    return any(b and norm(path).startswith(norm(b).rstrip("\\") + "\\") for b in bases)
+
+
+def task_items(rows, env: dict[str, str]) -> list[StartupItem]:
+    """Scheduled tasks worth showing. Everything outside \\Microsoft\\ (updaters,
+    OneDrive, vendor tools), and inside it only what does not look like Windows:
+    a program outside the Windows and Program Files folders, or a command judge()
+    flags -- a fake \\Microsoft\\Windows\\ task is a classic hiding place."""
+    items = []
+    for r in _as_list(rows):
+        if not isinstance(r, dict) or not r.get("path"):
+            continue
+        path, exe = str(r["path"]), str(r.get("exec") or "").strip()
+        if not exe and not r.get("clsid"):
+            continue
+        command = f"{exe} {r.get('args') or ''}".strip() if exe else f"COM handler {r['clsid']}"
+        when = ", ".join(dict.fromkeys(w for t in _as_list(r.get("triggers")) if (w := TASK_TRIGGERS.get(t))))
+        item = StartupItem(path.rsplit("\\", 1)[-1], command, "Scheduled task" + (f" ({when})" if when else ""),
+                           program_of(exe) if exe else "", enabled=int(r.get("state") or 0) != 1, kind="task", key=path)
+        if path.lower().startswith("\\microsoft\\"):
+            windows = _under(item.path, env.get("SystemRoot") or env.get("windir") or r"C:\Windows",
+                             env.get("ProgramFiles", ""), env.get("ProgramFiles(x86)", ""))
+            if not exe or (windows and not judge(item, env)):
+                continue
+        items.append(item)
     return items
+
+
+def service_items(rows, env: dict[str, str], cleam_off: set[str] = frozenset()) -> list[StartupItem]:
+    """Automatic services that are not part of Windows (svchost-hosted ones are),
+    plus the ones Cleam switched to manual. Microsoft-signed programs outside
+    the Windows folder (Defender, Edge's updater) go later, in hide_microsoft()."""
+    windows = env.get("SystemRoot") or env.get("windir") or r"C:\Windows"
+    items = []
+    for r in _as_list(rows):
+        if not isinstance(r, dict) or not r.get("name"):
+            continue
+        name = str(r["name"])
+        auto = str(r.get("mode", "")).lower() == "auto"
+        if not auto and name not in cleam_off:
+            continue
+        command = str(r.get("path") or "")
+        program = program_of(command)
+        if _under(program, windows) and ntpath.basename(program).lower() == "svchost.exe":
+            continue
+        items.append(StartupItem(str(r.get("display") or name), command,
+                                 "Service" + (" (delayed start)" if r.get("delayed") and auto else ""),
+                                 program, enabled=auto, kind="service", key=name))
+    return items
+
+
+def hide_microsoft(items: list[StartupItem], env: dict[str, str] | None = None) -> list[StartupItem]:
+    """Drop Windows' own services and tasks once signatures are known -- like
+    Autoruns' "Hide Microsoft entries" -- unless something about them is odd.
+    Tasks outside \\Microsoft\\ stay even when Microsoft signed them: the Edge
+    and OneDrive updaters are what people come here to switch off.
+
+    Fails closed: a service in the Windows folder whose signature could not be
+    read (the check timed out) counts as Windows', or the Print Spooler would
+    be offered for switching off."""
+    env = env if env is not None else dict(os.environ)
+    windir = env.get("SystemRoot") or env.get("windir") or r"C:\Windows"
+
+    def windows_own(i: StartupItem) -> bool:
+        signed_ms = i.signed == "Valid" and i.publisher.lower().startswith("microsoft")
+        if i.kind == "service":
+            return signed_ms or (not i.signed and _under(i.path, windir))
+        return i.kind == "task" and i.key.lower().startswith("\\microsoft\\") and signed_ms
+    return [i for i in items if not windows_own(i) or judge(i, env)]
 
 
 def _startup_approved(winreg) -> dict[str, bool]:
@@ -846,7 +986,7 @@ def _xdg_startup() -> list[StartupItem]:
             command = fields.get("Exec", "")
             items.append(StartupItem(fields.get("Name", entry.stem), command, str(folder),
                                      shutil.which(command.split(" ", 1)[0]) or "",
-                                     enabled=fields.get("Hidden", "false").lower() != "true"))
+                                     enabled=fields.get("Hidden", "false").lower() != "true", kind="autostart"))
     return items
 
 
@@ -862,7 +1002,8 @@ def _launchd_startup() -> list[StartupItem]:
                 continue
             args = data.get("ProgramArguments") or [data.get("Program", "")]
             items.append(StartupItem(data.get("Label", entry.stem), " ".join(map(str, args)), str(folder),
-                                     str(args[0]) if args else "", enabled=not data.get("Disabled", False)))
+                                     str(args[0]) if args else "", enabled=not data.get("Disabled", False),
+                                     kind="launchd"))
     return items
 
 

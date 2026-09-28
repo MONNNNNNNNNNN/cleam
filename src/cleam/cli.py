@@ -233,6 +233,8 @@ def cmd_security(args) -> int:
             print(f"  {mark} {i.name}{state}  [{i.publisher or i.signed or '-'}]\n         {i.command}")
             for reason in i.reasons:
                 print(f"         -> {reason}")
+        if items:
+            print("\n  Switch one off: cleam startup")
     if args.scan:
         if not security.can_quick_scan(checks):
             print("\ncleam: Microsoft Defender is not running, so there is nothing to scan with.", file=sys.stderr)
@@ -271,6 +273,48 @@ def _fix(checks, wanted: str, yes: bool) -> int:
         failed += not ok
         print(f"  {'OK' if ok else 'FAILED'}: {said}")
     return 1 if failed else 0
+
+
+def cmd_startup(args) -> int:
+    """What starts by itself; --off/--on switch one entry (dry run unless --yes)."""
+    items = security.startup()
+    wanted = args.off or args.on
+    if not wanted:
+        if args.json:
+            print(json.dumps([{**asdict(i), "id": i.id, "protective": i.protective} for i in items], indent=2))
+            return 0
+        for i in items:
+            mark = "WARN" if i.suspicious else "    "
+            state = "" if i.enabled else " (off)"
+            print(f"  {mark} {i.name}{state}  [{i.publisher or i.signed or '-'}]  {i.location}\n"
+                  f"         id: {i.id}\n         {i.command}")
+            for reason in i.reasons:
+                print(f"         -> {reason}")
+        print("\nSwitch one: cleam startup --off <id> --yes   (--on puts back what Cleam switched off)")
+        return 0
+    item = next((i for i in items if i.id.lower() == wanted.lower()), None)
+    if item is None:
+        raise SystemExit(f"cleam: no startup entry '{wanted}' (see `cleam startup`)")
+    title = repair.TURN_OFF if args.off else repair.TURN_ON
+    fix = next((f for f in repair.startup_fixes(item) if f.title == title), None)
+    if fix is None:
+        why = ("protective software is never switched off" if item.protective
+               else f"it is already {'off' if args.off else 'on'}" if item.enabled != bool(args.off)
+               else "only entries Cleam switched off can be put back here" if args.on
+               else "a RunOnce entry deletes itself after one run" if item.location.endswith("RunOnce")
+               else "Cleam has no switch for this kind of entry yet")
+        raise SystemExit(f"cleam: cannot {title.lower()} {item.name}: {why}")
+    print(f"{fix.title}: {item.name}")
+    for line in fix.tech:
+        print(f"    {line}")
+    if fix.warn:
+        print(f"  ! {fix.warn}")
+    if not args.yes:
+        print("  (dry run: add --yes to do it)")
+        return 0
+    ok, said = repair.run(fix)
+    print(f"  {'OK' if ok else 'FAILED'}: {said}")
+    return 0 if ok else 1
 
 
 def cmd_snapshot(args) -> int:
@@ -361,6 +405,14 @@ def parser() -> argparse.ArgumentParser:
                     help="list the fixes, or show (and with --yes run) the fix for one check id")
     se.add_argument("--yes", action="store_true", help="with --fix: really do it")
     se.set_defaults(fn=cmd_security)
+
+    st = sub.add_parser("startup", help="what starts by itself (programs, tasks, services); switch one off or back on")
+    how = st.add_mutually_exclusive_group()
+    how.add_argument("--off", metavar="ID", help="switch this entry off (ids from `cleam startup`)")
+    how.add_argument("--on", metavar="ID", help="put back an entry Cleam switched off")
+    st.add_argument("--yes", action="store_true", help="really do it")
+    st.add_argument("--json", action="store_true")
+    st.set_defaults(fn=cmd_startup)
 
     sn = sub.add_parser("snapshot", help="create or list restore points/snapshots")
     sn.add_argument("action", choices=("create", "list"))
