@@ -182,12 +182,60 @@ def smoke_platform_facts() -> None:
     check("every target explains itself", all(t["about"] and t["group"] for t in listed))
 
 
+def smoke_startup() -> None:
+    out = cleam("startup", "--json").stdout
+    try:
+        items = json.loads(out)
+        check("startup --json parses", isinstance(items, list), f"{len(items)} entries")
+    except ValueError as e:
+        check("startup --json parses", False, str(e))
+        return
+    if OS != "windows":
+        return
+    from cleam import security
+
+    raw = security._tasks_and_services()
+    tasks, services = security._as_list(raw.get("tasks")), security._as_list(raw.get("services"))
+    # A bare Windows has well over a hundred of each: the PowerShell ran and parsed.
+    check("PowerShell read the scheduled tasks", len(tasks) > 50, f"{len(tasks)} tasks")
+    check("PowerShell read the services", len(services) > 50, f"{len(services)} services")
+    check("svchost services are not listed", not any(i["kind"] == "service" and i["path"].lower().endswith(
+        "svchost.exe") for i in items))
+
+    # A throwaway task, switched off and back on through the journal.
+    name = "CleamSmokeTest"
+    ps = ["powershell", "-NoProfile", "-NonInteractive", "-Command"]
+    subprocess.run(ps + [f"Register-ScheduledTask -TaskName {name} -Force -Trigger (New-ScheduledTaskTrigger -AtLogOn)"
+                         " -Action (New-ScheduledTaskAction -Execute cmd.exe -Argument '/c exit') | Out-Null"],
+                   capture_output=True, text=True, timeout=120)
+
+    def state() -> str:
+        return subprocess.run(ps + [f"[int](Get-ScheduledTask -TaskName {name}).State"],
+                              capture_output=True, text=True, timeout=120).stdout.strip()
+
+    try:
+        listed = json.loads(cleam("startup", "--json").stdout)
+        mine = next((i for i in listed if i["id"] == f"task:\\{name}"), None)
+        check("a new logon task is listed", mine is not None and "at sign-in" in mine["location"],
+              mine["location"] if mine else "missing")
+        dry = cleam("startup", "--off", f"task:\\{name}")
+        check("--off without --yes changes nothing", "dry run" in dry.stdout and state() == "3", state())
+        cleam("startup", "--off", f"task:\\{name}", "--yes")
+        check("--off --yes disables the task", state() == "1", state())
+        cleam("startup", "--on", f"task:\\{name}", "--yes")
+        check("--on puts it back from the journal", state() == "3", state())
+    finally:
+        subprocess.run(ps + [f"Unregister-ScheduledTask -TaskName {name} -Confirm:$false"],
+                       capture_output=True, text=True, timeout=120)
+
+
 if __name__ == "__main__":
     print(f"Cleam platform smoke test on {OS} ({sys.platform}, python {sys.version.split()[0]})\n", flush=True)
     smoke_cli()
     smoke_platform_facts()
     smoke_leftovers()
     smoke_registry()
+    smoke_startup()
     failed = [name for name, ok, _ in results if not ok]
     print(f"\n{len(results) - len(failed)}/{len(results)} checks passed on {OS}")
     if failed:

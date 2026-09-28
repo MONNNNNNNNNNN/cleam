@@ -176,5 +176,70 @@ class Fixes(unittest.TestCase):
         self.assertIsNone(repair.approved_key(once))
 
 
+class StartupSwitch(unittest.TestCase):
+    TASK = "\\GoogleUpdaterTaskSystem142.0"
+    SVC_KEY = r"SYSTEM\CurrentControlSet\Services\Steam"
+
+    def setUp(self):
+        self.journal = Path(tempfile.mkdtemp()) / "journal.json"
+
+    def engine(self, reg=None, tasks=None):
+        return d.Debloater(reg or FakeRegistry(), tasks or FakeTasks({}), FakeApps(()), WIN11_PRO_ADMIN, self.journal)
+
+    def task(self, enabled=True):
+        return security.StartupItem("GoogleUpdaterTaskSystem142.0", "updater.exe --wake", "Scheduled task",
+                                    enabled=enabled, kind="task", key=self.TASK)
+
+    def service(self, enabled=True):
+        return security.StartupItem("Steam Client Service", "steamservice.exe", "Service", enabled=enabled,
+                                    kind="service", key="Steam")
+
+    def test_a_task_is_switched_off_through_the_journal_and_comes_back(self):
+        tasks = FakeTasks({self.TASK: 3})
+        engine = self.engine(tasks=tasks)
+        [fix] = repair.startup_fixes(self.task(), {"tweaks": {}})
+        self.assertEqual((fix.title, fix.kind), (repair.TURN_OFF, repair.CHANGE))
+        self.assertIn(f"scheduled task {self.TASK}: Disabled", fix.tech)
+        self.assertIn("updates only when you open it", fix.warn)  # an updater says what switching it off costs
+        self.assertTrue(engine.apply(fix.tweak).ok)
+        self.assertEqual(tasks.s[self.TASK], 1)
+        [back] = repair.startup_fixes(self.task(enabled=False), d.load_journal(self.journal))
+        self.assertEqual(back.title, repair.TURN_ON)
+        self.assertTrue(engine.undo(fix.tweak.id).ok)
+        self.assertEqual(tasks.s[self.TASK], 3)
+
+    def test_a_service_goes_to_manual_and_undo_restores_its_own_start_type(self):
+        reg = FakeRegistry({(d.HKLM, self.SVC_KEY, "Start"): (4, 2)})
+        engine = self.engine(reg)
+        [fix] = repair.startup_fixes(self.service(), {"tweaks": {}})
+        self.assertIn("service Steam: Start = 3 (Manual)", fix.tech[0])
+        self.assertEqual(fix.warn, "")
+        self.assertTrue(engine.apply(fix.tweak).ok)
+        self.assertEqual(reg.get(d.HKLM, self.SVC_KEY, "Start"), (4, 3))
+        self.assertIn("startup-service-Steam", d.load_journal(self.journal)["tweaks"])
+        self.assertTrue(engine.undo("startup-service-Steam").ok)
+        self.assertEqual(reg.get(d.HKLM, self.SVC_KEY, "Start"), (4, 2))
+
+    def test_undo_after_the_service_was_uninstalled_does_not_recreate_its_key(self):
+        reg = FakeRegistry({(d.HKLM, self.SVC_KEY, "Start"): (4, 2)})
+        engine = self.engine(reg)
+        [fix] = repair.startup_fixes(self.service(), {"tweaks": {}})
+        engine.apply(fix.tweak)
+        reg.values.clear()
+        reg.keys.clear()  # uninstalled
+        self.assertTrue(engine.undo("startup-service-Steam").ok)
+        self.assertFalse(reg.key_exists(d.HKLM, self.SVC_KEY))
+        self.assertNotIn("startup-service-Steam", d.load_journal(self.journal)["tweaks"])
+
+    def test_switched_off_by_someone_else_offers_nothing(self):
+        # Without a journal entry there is no exact state to go back to.
+        self.assertEqual(repair.startup_fixes(self.service(enabled=False), {"tweaks": {}}), [])
+
+    def test_protective_software_is_never_offered(self):
+        av = security.StartupItem("Malwarebytes Service", "mbamservice.exe", "Service", kind="service",
+                                  key="MBAMService")
+        self.assertEqual(repair.startup_fixes(av, {"tweaks": {}}), [])
+
+
 if __name__ == "__main__":
     unittest.main()

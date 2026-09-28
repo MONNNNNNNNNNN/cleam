@@ -279,8 +279,25 @@ files. Nothing in it deletes, quarantines or disables anything.
   binary) and two entries pointing at programs that no longer exist.
 - **`quick_scan()`** runs `MpCmdRun -Scan -ScanType 1`, only offered when
   Defender is the active antivirus; MpCmdRun fails while it is disabled.
-- Not built: scheduled tasks and services in the startup list, and turning
-  entries off (a persistent change that needs an undo first).
+- **Tasks and services (2026-09-28)** join `startup()` from one PowerShell
+  call (`TASKS_AND_SERVICES`); `task_items()` / `service_items()` /
+  `hide_microsoft()` filter in Python so they are tested off Windows. Tasks:
+  all outside `\Microsoft\`, inside it only a program outside Windows/Program
+  Files or one `judge()` flags (fake Windows tasks are a classic hiding
+  place). Microsoft-signed root tasks stay: the Edge/OneDrive updaters are
+  what people want off. Services: Auto only, svchost-hosted and
+  Microsoft-signed dropped. Unquoted service paths with spaces are flagged.
+- **Turning off:** tasks and services are per-item `Tweak`s
+  (`startup-task-<path>`, `startup-service-<name>`) through
+  `Debloater.apply`, so the journal is the undo; a service goes to Manual
+  (3), not Disabled, so a program that needs it can still start it. "Turn
+  back on" exists only with a journal entry: without one there is no exact
+  state to restore. `StartupItem.protective` (AV/firewall/backup words,
+  word-boundary regex so "reset" is not ESET) is never offered. CLI: `cleam
+  startup [--off|--on ID] [--yes]`. The GUI still lists without switches,
+  like its checks.
+- `security._powershell` forces UTF-8 output: the default OEM code page read
+  as ANSI raised UnicodeDecodeError on a service name like "für".
 
 ## Disk Cleanup handlers (`wincleanup.py`)
 

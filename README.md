@@ -136,6 +136,8 @@ cleam restore ~/.local/share/cleam/backups/Some-App-20260918-153000
 
 cleam security                    # antivirus, ransomware signs, startup programs (read-only)
 cleam security --scan             # plus a Defender quick scan
+cleam startup                     # programs, scheduled tasks and services that start by themselves
+cleam startup --off <id> --yes    # switch one off (dry run without --yes); --on puts it back
 
 cleam snapshot create --description "before driver update"
 cleam snapshot list
@@ -257,7 +259,14 @@ debloat reverses them). From scripts: `cleam security --fix` lists them,
   Music and OneDrive. Names only; no file is opened.
 - **Startup programs:** everything that starts with the computer, oddest
   first: missing programs, programs in Temp or Downloads, script hosts,
-  encoded PowerShell, unsigned or tampered signatures.
+  encoded PowerShell, unsigned or tampered signatures. On Windows that is
+  the Run keys and Startup folders, scheduled tasks (every one outside
+  `\Microsoft\`, plus any inside it that runs something not from Windows),
+  and automatic services that are not Windows' own (unquoted service paths
+  are flagged). Any entry can be switched off: Run keys and Startup folders
+  with Task Manager's own switch; tasks are disabled and services set to
+  manual through the debloat journal, so Undo debloat or `--on` restores
+  them exactly. Antivirus, firewall and backup software is never offered.
 - `cleam security --scan` runs a Microsoft Defender quick scan when Defender
   is the active antivirus. Removing a threat is the antivirus's job, not
   Cleam's.

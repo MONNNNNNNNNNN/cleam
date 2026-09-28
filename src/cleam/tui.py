@@ -1229,12 +1229,14 @@ def check_topics(checks, items, signs) -> list[Topic]:
                         found or [(security.OK, "No signs found", "No ransom notes, known extensions or mass renames.",
                                    "", [])]))
     startup = []
+    journal = debloat.load_journal()
+    kinds = {"task": "task", "service": "service"}
     for i in items:
-        detail = (i.publisher or i.path or i.command) + ("" if i.enabled else "  (turned off)")
+        detail = ((f"{kinds[i.kind]} {G.sep} " if i.kind in kinds else "") + (i.publisher or i.path or i.command)
+                  + ("" if i.enabled else "  (turned off)"))
         # Suspicious but switched off (e.g. by the fix below): it cannot start, so it is information now.
         state = (security.WARN if i.enabled else security.INFO) if i.suspicious else security.OK
-        startup.append((state, i.name, detail, "; ".join(i.reasons),
-                        repair.startup_fixes(i) if i.suspicious else []))
+        startup.append((state, i.name, detail, "; ".join(i.reasons), repair.startup_fixes(i, journal)))
     if startup:
         topics.append(Topic("Starts with the computer", sorted(startup, key=order)))
     for t in topics:

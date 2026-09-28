@@ -982,6 +982,9 @@ class Debloater:
             return Outcome(tweak_id, False, "not applied by Cleam")
         failed: list[str] = []
         for r in entry["registry"]:
+            if r["key"].lower().startswith("system\\currentcontrolset\\services\\") and \
+                    not self.registry.key_exists(r["hive"], r["key"]):
+                continue  # the service was uninstalled since: writing Start would recreate a bare key
             try:
                 if r["existed"]:
                     self.registry.set(r["hive"], r["key"], r["name"], r["kind"], r["value"])
