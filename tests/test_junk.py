@@ -102,6 +102,17 @@ class EntriesMode(unittest.TestCase):
         junk.run(t, delete=True)
         self.assertEqual(sorted(p.name for p in root.iterdir()), ["desktop.ini"])
 
+    def test_no_minimum_age_means_any_age_even_with_a_coarse_clock(self):
+        # Python 3.12's time.time() on Windows ticks every 15.6 ms, so it can
+        # read earlier than a file written a moment ago; with no minimum age
+        # that file must still count (it failed CI on windows-latest).
+        root = Path(tempfile.mkdtemp())
+        touch(root / "just-deleted", 5, old=False)
+        t = junk.Target("bin", "bin", (root,), mode="entries", min_age_hours=0)
+        real = junk.time.time
+        with mock.patch.object(junk.time, "time", side_effect=lambda: real() - 1.0):
+            self.assertEqual(junk.run(t).files, 1)
+
     def test_cache_entry_goes_whole_or_not_at_all(self):
         root = Path(tempfile.mkdtemp())
         touch(root / "stale" / "a")
@@ -149,7 +160,7 @@ class BuiltinTargets(unittest.TestCase):
         self.assertEqual(len(ids), len(set(ids)))
 
     def test_emptying_the_bin_is_opt_in(self):
-        # The Recycle Bin / Trash is the only undo anyone has, so the GUI must
+        # The Recycle Bin / Trash is the only undo anyone has, so the menu must
         # never pre-tick it.
         opt_in = {t.id for t in junk.targets() if t.opt_in}
         self.assertIn("trash" if junk.OS != "windows" else "recycle-bin", opt_in)

@@ -1,7 +1,7 @@
 name: release
 
-# Builds what people actually download: a portable CLI binary per OS, the
-# window as a single executable, and a Windows installer. Run it by hand
+# Builds what people actually download: a portable CLI binary per OS (the
+# Windows one is what menu.ps1 fetches) and a Windows installer. Run it by hand
 # (Actions -> release -> Run workflow) or by pushing a v* tag, which also
 # publishes a GitHub release.
 on:
@@ -34,52 +34,14 @@ jobs:
           path: dist/cleam*
           if-no-files-found: error
 
-  gui:
-    strategy:
-      fail-fast: false
-      matrix:
-        os: [windows-latest, ubuntu-latest, macos-latest]
-    runs-on: ${{ matrix.os }}
-    steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
-        with:
-          python-version: "3.12"
-      # flet-cli is installed explicitly: `flet pack` otherwise fetches it on
-      # first use, which is a surprise in a build log.
-      - run: pip install -e '.[gui]' flet-cli pyinstaller
-      - run: flet pack packaging/entry_gui.py --name cleam-gui --product-name Cleam --yes
-      # An artifact is a zip without Unix permissions, so a .app bundle has to
-      # travel zipped by ditto or its executable arrives non-executable.
-      - name: Zip the macOS app bundle
-        if: runner.os == 'macOS'
-        # Whatever the bundle is called (--product-name could rename it); fails
-        # loudly if flet pack produced no bundle at all.
-        run: |
-          cd dist
-          shopt -s nullglob
-          apps=(*.app)
-          [ ${#apps[@]} -gt 0 ] || { echo "no .app bundle in dist"; exit 1; }
-          for app in "${apps[@]}"; do ditto -c -k --keepParent "$app" "cleam-gui.zip" && rm -rf "$app"; done
-      - run: ls -la dist
-      - uses: actions/upload-artifact@v4
-        with:
-          name: cleam-gui-${{ runner.os }}-${{ runner.arch }}
-          path: dist/cleam-gui*
-          if-no-files-found: error
-
   installer:
-    needs: [cli, gui]
+    needs: [cli]
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@v4
       - uses: actions/download-artifact@v4
         with:
           name: cleam-cli-Windows-X64
-          path: dist
-      - uses: actions/download-artifact@v4
-        with:
-          name: cleam-gui-Windows-X64
           path: dist
       - run: ls -la dist
       - name: Read the version
@@ -95,7 +57,7 @@ jobs:
           if-no-files-found: error
 
   publish:
-    needs: [cli, gui, installer]
+    needs: [cli, installer]
     if: startsWith(github.ref, 'refs/tags/v')
     runs-on: ubuntu-latest
     permissions:
@@ -105,10 +67,10 @@ jobs:
         with:
           path: downloads
       - run: ls -R downloads
-      # Each artifact holds files named plainly (cleam, cleam-gui.exe), and
+      # Each artifact holds a file named plainly (cleam, cleam.exe), and
       # Linux and macOS both produce a `cleam`: a release rejects the second.
       # The artifact name already says OS and arch, so it becomes the file
-      # name: cleam-gui-windows-x64.exe is what run.ps1 downloads.
+      # name: cleam-cli-windows-x64.exe is what menu.ps1 downloads.
       - name: Name every file after its OS and architecture
         run: |
           mkdir release
@@ -116,12 +78,8 @@ jobs:
             name=$(basename "$dir" | tr '[:upper:]' '[:lower:]')
             for f in "$dir"*; do
               base=$(basename "$f")
-              # flet pack on Linux also writes cleam-gui.desktop, whose Exec=
-              # is a path on the CI runner. v0.1.0 shipped it in place of the
-              # program: both mapped to the same extensionless name.
-              case "$base" in *.desktop) continue ;; esac
               if [ "$name" = cleam-installer ]; then target="$base"
-              else suffix="${base#cleam-gui}"; suffix="${suffix#cleam}"; target="$name$suffix"; fi
+              else target="$name${base#cleam}"; fi
               if [ -e "release/$target" ]; then echo "two files would both be release/$target"; exit 1; fi
               cp "$f" "release/$target"
             done

@@ -73,7 +73,7 @@ def list_apps() -> list[App]:
 
 
 def uninstall(app: App, capture: bool = False, timeout: float | None = None) -> tuple[int, str]:
-    """(exit code, output). capture=True is for the GUI, which has no terminal.
+    """(exit code, output). capture=True is for the menu, whose screen is not a free terminal.
 
     Without a terminal there is nobody to answer apt's y/n or sudo's password
     prompt, so pass the confirmation up front and let sudo fail fast instead.
@@ -81,7 +81,7 @@ def uninstall(app: App, capture: bool = False, timeout: float | None = None) -> 
     A Windows uninstaller is never captured. It has its own window, writes
     nothing useful to a pipe, and commonly relaunches itself (Au_.exe,
     _isdel.exe); the child inherits the pipe handles, so reading to EOF can
-    block long after the uninstaller is done -- which would hang the GUI with
+    block long after the uninstaller is done -- which would hang the menu with
     no way out.
     """
     capture = capture and app.source != "registry"

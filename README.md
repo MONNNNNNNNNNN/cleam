@@ -4,24 +4,21 @@ Clean junk files, uninstall programs, and take a restore point or snapshot
 first — on Windows, Linux and macOS. See [docs/platforms.md](docs/platforms.md)
 for what each OS allows, including why Android and iOS can only get a subset.
 
-## Run it without installing (Windows)
+## Run it (Windows)
 
 One line in PowerShell, nothing to install, no Python needed:
 
 ```powershell
-irm https://raw.githubusercontent.com/MONNNNNNNNNNN/cleam/main/run.ps1 | iex
-```
-
-It downloads the window from the latest release into
-`%LOCALAPPDATA%\Cleam\portable`, checks it against the SHA-256 GitHub
-publishes, and starts it. Later runs only download when there is a newer
-release. Use an elevated PowerShell to include the system targets.
-
-For the terminal menu instead of the window (ASCII, arrow keys and checkboxes):
-
-```powershell
 irm https://raw.githubusercontent.com/MONNNNNNNNNNN/cleam/main/menu.ps1 | iex
 ```
+
+It downloads the command-line build from the latest release into
+`%LOCALAPPDATA%\Cleam\portable`, checks it against the SHA-256 GitHub
+publishes, and opens the menu in the same window: Overview, Clean junk,
+Programs, Debloat, System check, Snapshots and Undo. Later runs start at once
+and only download when there is a newer release. Use an elevated PowerShell
+for machine-wide settings and system junk. On Linux and macOS, bare `cleam`
+opens the same menu.
 
 ## Debloat Windows 10/11
 
@@ -81,38 +78,19 @@ The app list and its risk ratings come from
 ## Install
 
 ```sh
-pip install .              # CLI only — Python 3.10+, no dependencies
-pip install '.[gui]'       # adds the window (Flet)
-cleam --help
-cleam-gui                  # the window
+pip install .              # Python 3.10+, no dependencies
+cleam                      # the menu
+cleam --help               # every page as a command, for scripts
 ```
 
 Or, without installing: `PYTHONPATH=src python -m cleam --help`.
 
-![The Overview tab](docs/screenshot-overview.png)
-
-Four pages in a side rail: **Overview** (OS and build, a usage ring per disk,
-where the space went), **Clean** (the total that can be freed, targets grouped
-into System / Browsers / Apps / Developer tools / Recycle Bin with a checkbox
-per group, optional restore point first), **Programs** (search, uninstall),
-**Snapshots** (create, list). The window and the command
-line call the same core, so they can never disagree about what a clean would
-delete.
-
-Interface rules, all of them there because breaking one hurt in testing
-(`docs/ux-test-plan.md` has the personas, scenarios and results):
-
-- Opening the app measures nothing. The OS line and the disks are instant;
-  walking `AppData` and `C:\Windows` happens when you press **Measure
-  folders**.
-- **Clean selected** stays disabled until a scan has found something.
-- The Recycle Bin / Trash is never pre-ticked. It is the only undo you have.
-- Each checkbox carries its target's name, so a screen reader announces what
-  it is about to delete.
-- Light and dark themes are both defined, and the controls wrap instead of
-  clipping at 700px or 200% scaling.
-
-![Dark mode at 700px](docs/screenshot-dark-narrow.png)
+In the menu, **Programs** takes several programs in one pass: each runs its
+own uninstaller, one whose uninstaller is missing is force-removed into a
+backup instead, and what they leave behind is offered once at the end. The
+menu and the command line call the same core, so they can never disagree
+about what a clean would delete. The Recycle Bin / Trash is never pre-ticked;
+it is the only undo you have.
 
 ## Use
 
@@ -174,7 +152,7 @@ rather than reporting a false 0 B.
 ## What gets cleaned
 
 `cleam targets` prints the full list for the machine it runs on, with a line on
-what each one is and what deleting it costs. In the window they are grouped:
+what each one is and what deleting it costs. In the menu they are grouped:
 
 | Group | Windows | Linux | macOS |
 |---|---|---|---|

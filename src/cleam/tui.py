@@ -39,7 +39,7 @@ import threading
 import time
 from dataclasses import dataclass, field
 
-from . import __version__, debloat, junk, repair, security, snapshot
+from . import __version__, apps, debloat, junk, leftovers, overview, repair, security, snapshot
 from .system import OS, human, is_admin, relaunch_as_admin
 
 # Three symbol sets, picked by what the terminal can actually draw. Checked
@@ -77,6 +77,7 @@ ICONS = {
     "Diagnostics": "√", "Services": "±", "Apps": "♣",
     "System": "■", "Browsers": "○", "Developer tools": "±", "Recycle Bin": "×",
     "debloat": "▼", "clean": "░", "security": "◘", "undo": "◄", "admin": "↑", "quit": "×",
+    "overview": "■", "programs": "♣", "snapshot": "∞",
     "basic": "○", "advanced": "♦", "back": "◄",
 }
 GLYPH_SETS = {
@@ -1181,6 +1182,146 @@ def clean_screen(term, bg: Background) -> None:
     message(term, "Clean junk", [style(f"Freed {human(freed)} in total.", BOLD, GREEN), ""] + progress.lines)
 
 
+# ---- Overview, Programs, Snapshots: what the window had, now in the menu
+
+
+def read_overview() -> tuple:
+    """Instant: OS name, disks, and the folders worth explaining (unmeasured)."""
+    return overview.os_name(), overview.disks(), overview.folders()
+
+
+def usage_bar(percent: int, width: int = 20) -> str:
+    filled = round(width * min(percent, 100) / 100)
+    colour = BAD_C if percent >= 90 else WARN_C if percent >= 80 else ACCENT
+    return style(G.full * filled, colour) + style(G.empty * (width - filled), MUTED)
+
+
+def overview_lines(name: str, disks: list, folders: list) -> list[str]:
+    lines = [style(name, BOLD), "", style("Disks", ACCENT, BOLD)]
+    for d in disks:
+        lines.append(f"  {d.mount:<24} {usage_bar(d.percent_used)} {d.percent_used:>3}% used  "
+                     + style(f"{human(d.free)} free of {human(d.total)}", MUTED))
+    lines += ["", style("Where the space went", ACCENT, BOLD)]
+    for f in folders:
+        lines.append(f"  {f.label:<24} {f.size_label:>14}")
+        if f.measured and f.denied and f.files:
+            lines.append(style(f"      {f.denied} folders could not be read, so the real total is larger", MUTED))
+        if f.note:
+            lines.append(style(f"      {f.note}", MUTED))
+    return lines
+
+
+def overview_screen(term, bg: Background) -> None:
+    name, disks, folders = bg.get(term, "overview", "Overview", "Reading disks")
+    while True:
+        measured = all(f.measured for f in folders)
+        # Nothing is walked until asked: C:\Windows and AppData are hundreds of thousands of files.
+        buttons = [("Back", "back")] + ([] if measured else [("Measure folders", "measure")])
+        action = message(term, "Overview", overview_lines(name, disks, folders), buttons,
+                         "" if measured else "M measures (walks every folder once, deletes nothing)")
+        if measured or action not in ("measure", "m", "M"):
+            return
+        progress = Progress(term, "Overview", len(folders))
+        for f in folders:
+            progress.step(f"Measuring {f.label}  ({f.path})")
+            overview.measure(f)
+            progress.add(f"{f.label}: {f.size_label}")
+
+
+def read_apps() -> list:
+    return apps.list_apps()
+
+
+def programs_screen(term, bg: Background) -> None:
+    installed = bg.get(term, "apps", "Programs", "Reading installed programs")
+    missing = [a for a in installed if apps.uninstaller_missing(a)]
+    rows: list[Row] = []
+    if missing:
+        rows.append(Row("Uninstaller missing: force remove into a backup", header=True))
+        rows += [Row(a.name, status=a.version or a.source, data=a, tech=[f"folder: {a.install_dir or '?'}",
+                     f"entry: {a.key or '?'}"],
+                     detail="Its own uninstaller is gone. Cleam moves its folder, its entry and its leftovers "
+                            "into a backup that `cleam restore` puts back.") for a in missing]
+    rows.append(Row("Installed programs", header=True))
+    rows += [Row(a.name, status=a.version or a.source, data=a,
+                 tech=[a.command if isinstance(a.command, str) else " ".join(a.command)],
+                 detail="Runs the program's own uninstaller, then offers to clear what it left behind.")
+             for a in installed if a not in missing]
+    chosen = checklist(term, "Programs", f"{len(installed)} programs. Tick what to remove; several at once is fine.",
+                       rows, "Uninstall")
+    if not chosen:
+        return
+    plans, text = {}, []
+    for r in chosen:
+        app = r.data
+        if app in missing:
+            items, why = leftovers.force_plan(app, installed)
+            if why:
+                text.append(f"  - {app.name}: skipped, {why}")
+                continue
+            plans[app.id] = [i for i in items if i.confidence == "high"]
+            text.append(f"  - {app.name}: force remove, moves {len(plans[app.id])} items to a backup")
+        else:
+            text.append(f"  - {app.name}: runs its own uninstaller")
+    if not confirm(term, "Programs", text, "Go ahead?"):
+        return
+    progress = Progress(term, "Programs", len(chosen))
+    left: list = []
+    names = tuple(a.name for a in installed)
+    for r in chosen:
+        app = r.data
+        if app in missing:
+            if app.id not in plans:
+                progress.add(f"{mark(False)}{app.name}: skipped")
+                continue
+            progress.step(f"Moving {app.name} to a backup")
+            # Folder first, stop at the first failure: an entry is never deleted while its folder is in use.
+            backup, errors = leftovers.remove(plans[app.id], label=app.name, stop_on_error=True)
+            progress.add(f"{mark(not errors)}{app.name}: " + (f"stopped, {errors[0]} (close it and try again)"
+                         if errors else f"moved to {backup}") + f"  -- undo: cleam restore \"{backup}\"")
+            continue
+        progress.step(f"Running {app.name}'s uninstaller" + (" (in its own window)" if app.source == "registry" else ""))
+        code, said = apps.uninstall(app, capture=True, timeout=1800)
+        progress.add(f"{mark(code == 0)}{app.name}: " + ("uninstalled" if code == 0 else
+                     (said.strip().splitlines() or [f"exit {code}"])[-1]))
+        if code == 0:
+            found = leftovers.scan(app.name, install_dir=app.install_dir,
+                                   other_apps=tuple(n for n in names if n != app.name))
+            left += [(app, i) for i in found if i.confidence == "high"]
+    bg.refresh("apps")
+    if left and confirm(term, "Leftovers", ["Uninstallers left these behind (uncertain matches are not listed):", ""]
+                        + [f"  - {a.name}: {i.target} ({human(i.bytes)})" for a, i in left],
+                        "Move them to a backup (cleam restore undoes it)?"):
+        for app in {a.id: a for a, _ in left}.values():
+            backup, errors = leftovers.remove([i for a, i in left if a.id == app.id], label=app.name)
+            progress.add(f"{mark(not errors)}{app.name} leftovers: moved to {backup}"
+                         + (f", {len(errors)} could not be moved" if errors else ""), advance=False)
+    message(term, "Programs", progress.lines)
+
+
+SNAPSHOT_HELP = {
+    "windows": "A restore point rolls Windows settings, drivers and programs back if something breaks. "
+               "Windows allows one every 24 hours, and it needs Cleam running as administrator.",
+    "macos": "A local Time Machine snapshot, kept for about 24 hours.",
+    "linux": "A Timeshift or Snapper snapshot of the system. Without a sudo password cached, "
+             "start Cleam with sudo.",
+}
+
+
+def snapshot_screen(term, bg: Background) -> None:
+    while True:
+        action = message(term, "Snapshots", [SNAPSHOT_HELP.get(OS, "")],
+                         [("Create one", "create"), ("List", "list"), ("Back", "back")], "C creates, L lists")
+        action = {"c": "create", "C": "create", "l": "list", "L": "list"}.get(action, action)
+        if action not in ("create", "list"):
+            return
+        Progress(term, "Snapshots").step("Creating a snapshot..." if action == "create" else "Reading the list...")
+        # Captured, and sudo told not to prompt: a password prompt inside the menu would hang it.
+        code, text = snapshot.create("Cleam", capture=True) if action == "create" else snapshot.list_snapshots(capture=True)
+        head = (mark(code == 0) + ("Created." if code == 0 else "Failed.")) if action == "create" else ""
+        message(term, "Snapshots", ([head, ""] if head else []) + (text.splitlines() or ["(nothing listed)"]))
+
+
 # ---- System check: every topic is a dropdown, alerts stand out
 
 SEVERITY = {security.BAD: 4, security.WARN: 3, security.UNKNOWN: 2, security.INFO: 1, security.OK: 0}
@@ -1252,15 +1393,9 @@ def run_fix(term, bg: Background, fix, ask: bool = True) -> str:
             clean_screen(term, bg)
         return ""
     if ask:
-        text = ([fix.about, ""] if fix.about else []) + ["What happens:"] + [f"  {t}" for t in fix.tech]
-        if fix.undo:
-            text += ["", f"To reverse it: {fix.undo}"]
-        elif fix.kind == repair.CHANGE:
-            text += ["", "Recorded first: Undo debloat puts the previous values back."]
-        if fix.restart:
-            text += ["", "Takes effect after a restart."]
-        if fix.warn:
-            text += ["", style(f"{G.warn} {fix.warn}", WARN_C)]
+        text, warn = repair.explain(fix)
+        if warn:
+            text += ["", style(f"{G.warn} {warn}", WARN_C)]
         if not confirm(term, fix.title, text, f"{fix.title}?"):
             return ""
     progress = Progress(term, fix.title)
@@ -1424,15 +1559,19 @@ def security_screen(term, bg: Background) -> None:
 
 def main_menu(term) -> None:
     global STATUS
-    readers = {"check": read_check, "clean": read_clean}
+    readers = {"check": read_check, "clean": read_clean, "overview": read_overview, "apps": read_apps}
     if OS == "windows":
         readers["debloat"] = read_debloat
     bg = Background(readers)
-    items = [("debloat", "Debloat", "Privacy, ads, AI features, clutter, apps, services, gaming, security",
-              debloat_screen, "debloat"),
+    items = [("overview", "Overview", "Disks, and where the space went", overview_screen, "overview"),
              ("clean", "Clean junk", "Caches, temp files, crash dumps, old logs", clean_screen, "clean"),
+             ("programs", "Programs", "Uninstall, force-remove a broken one, clear its leftovers", programs_screen,
+              "apps"),
+             ("debloat", "Debloat", "Privacy, ads, AI features, clutter, apps, services, gaming, security",
+              debloat_screen, "debloat"),
              ("security", "System check", "Protection, updates, hardware, health, gaming, startup", security_screen,
               "check"),
+             ("snapshot", "Snapshots", "A restore point or snapshot before a big change", snapshot_screen, None),
              ("undo", "Undo debloat", "Put back anything Cleam changed", undo_screen, None)]
     if OS == "windows" and not is_admin():
         items.append(("admin", "Restart as administrator", "For machine-wide settings and system junk", None, None))
@@ -1454,7 +1593,7 @@ def main_menu(term) -> None:
         banner = [style("  " + b, ACCENT, BOLD) for b in (BANNER if G is not GLYPH_SETS["ascii"] else BANNER_ASCII)]
     else:
         banner = [style("  " + b, f"38;5;{shade}", BOLD) for b, shade in zip(BANNER, BANNER_SHADES)]
-    subtitle = banner + [style(f"  clean {G.sep} debloat {G.sep} check", MUTED), ""]
+    subtitle = banner + [style(f"  clean {G.sep} uninstall {G.sep} debloat {G.sep} check", MUTED), ""]
     while True:
         chosen = menu(term, "Menu", [(k, n, a) for k, n, a, _, _ in items], subtitle, status,
                       f"  Point or click an item {G.sep} Up/Down + Enter {G.sep} its number {G.sep} Q quits")

@@ -342,6 +342,19 @@ def unblock_hosts(names: list[str], path: Path | None = None) -> str:
     return ""
 
 
+def explain(fix: Fix) -> tuple[list[str], str]:
+    """What a confirm dialog says before a fix runs, in every front end:
+    (lines, warning). The warning is kept apart so each can show it louder."""
+    lines = ([fix.about, ""] if fix.about else []) + ["What happens:"] + [f"  {t}" for t in fix.tech]
+    if fix.undo:
+        lines += ["", f"To reverse it: {fix.undo}"]
+    elif fix.kind == CHANGE:
+        lines += ["", "Recorded first: Undo debloat puts the previous values back."]
+    if fix.restart:
+        lines += ["", "Takes effect after a restart."]
+    return lines, fix.warn
+
+
 def run(fix: Fix, engine: debloat.Debloater | None = None) -> tuple[bool, str]:
     """Carry out one fix. (ok, what to tell the user)."""
     if fix.admin and OS == "windows" and not is_admin():

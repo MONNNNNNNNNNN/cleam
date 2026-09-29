@@ -132,7 +132,7 @@ class Uninstall(unittest.TestCase):
 
     def test_a_windows_uninstaller_is_never_captured(self):
         # Its pipes can outlive it (Au_.exe, _isdel.exe relaunch themselves),
-        # which would hang the GUI thread forever.
+        # which would hang the menu forever.
         app = apps.App("{GUID}", "Some App", "1.0", "registry", "MsiExec.exe /X{GUID}")
         with mock.patch.object(apps.subprocess, "run") as run:
             run.return_value = mock.Mock(returncode=0)

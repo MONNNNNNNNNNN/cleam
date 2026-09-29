@@ -280,6 +280,17 @@ def forced(name: str, install_dir: str, reg_key: str = "", other_names: tuple[st
     return items, ""
 
 
+def force_plan(app, installed: list, install_dir: str = "") -> tuple[list[Leftover], str]:
+    """forced() for an installed-programs entry (apps.App): the CLI and the menu
+    plan a forced uninstall the same way. install_dir, when given, is the
+    user naming the folder."""
+    others = [a for a in installed if a is not app and a.id != app.id]
+    return forced(app.name, install_dir or app.install_dir, app.key,
+                  other_names=tuple(a.name for a in others),
+                  other_dirs=tuple(a.install_dir for a in others if a.install_dir),
+                  explicit=bool(install_dir))
+
+
 def safe_label(label: str) -> str:
     """A program name turned into one harmless folder name.
 

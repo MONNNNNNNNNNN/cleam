@@ -31,7 +31,7 @@ def is_admin() -> bool:
 def sudo(cmd: list[str], noninteractive: bool = False) -> list[str]:
     """Prefix sudo on POSIX when not already root, so the password prompt reaches the terminal.
 
-    noninteractive adds -n, for callers with no terminal (the GUI): sudo then
+    noninteractive adds -n, for callers with no free terminal (the menu): sudo then
     fails immediately instead of waiting forever for a password nobody can type.
     """
     if OS != "windows" and not is_admin() and shutil.which("sudo"):

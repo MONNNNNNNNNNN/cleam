@@ -13,11 +13,9 @@ on each OS.
 | Windows | windows-latest, Windows Server 2025 24H2 (build 26100.33296) | 23/23 checks, including the registry key exported, deleted, imported back, value intact |
 | macOS | macos-latest | 20/20 checks |
 | Windows installer | Built with Inno Setup, installed with `/VERYSILENT`, the installed `cleam.exe` run, then uninstalled silently | Installs to `%LOCALAPPDATA%\Programs\Cleam`, runs, uninstalls leaving nothing |
-| Android | `flet build apk` on ubuntu-latest | Builds: a 60 MiB APK. Never run on a device, and the feature table below is why that matters |
-| iOS | `flet build ipa` on macos-latest | Builds a `.xcarchive`; **no `.ipa`** — Xcode exports one only for a signed app ($99/year Apple Developer Program) |
 
-The GUI itself is verified separately by driving it headlessly; see
-`docs/ux-test-plan.md`.
+The Android and iOS builds were Flet-based and went with the GUI
+(2026-09-29); the table below still says what a phone would allow.
 
 The three features — clean junk, uninstall programs, take a restore point or
 snapshot — map very differently onto each OS. On the desktop they are all
@@ -53,10 +51,10 @@ choice changes that.
 | Form | How | Status |
 |---|---|---|
 | Command line | `pip install .` then `cleam …`; scriptable with `--json` and exit codes | Done |
-| GUI | Flet (Flutter), `pip install '.[gui]'` then `cleam-gui` | Done — Clean, Programs, Snapshots tabs |
-| Portable binary | PyInstaller for the CLI, `flet pack` for the window, per OS (`.github/workflows/release.yml`) | Built in CI: CLI 8 MiB, window 61 MiB on Windows |
-| Installer `.exe` | Inno Setup around both binaries (`packaging/cleam.iss`) | Built in CI. `PrivilegesRequired=lowest`, so a standard account installs into its own profile; PATH is an unchecked opt-in |
-| Android / iOS | `flet build apk` / `flet build ipa` — needs the Flutter SDK, never run here | Not started, and the feature set shrinks to the table above |
+| Terminal menu | `irm https://raw.githubusercontent.com/MONNNNNNNNNNN/cleam/main/menu.ps1 \| iex` (Windows), or bare `cleam` in any terminal | Done — the one entry for users |
+| Portable binary | PyInstaller for the CLI, per OS (`.github/workflows/release.yml`) | Built in CI: 8 MiB; the Windows one is what menu.ps1 fetches |
+| Installer `.exe` | Inno Setup around `cleam.exe` (`packaging/cleam.iss`); its shortcut opens the menu | Built in CI. `PrivilegesRequired=lowest`, so a standard account installs into its own profile; PATH is an unchecked opt-in |
+| GUI, Android / iOS | Flet | Removed 2026-09-29 |
 
 Unsigned Windows binaries trigger SmartScreen, and a one-file PyInstaller
 build that deletes files is exactly what antivirus heuristics flag. Signing
