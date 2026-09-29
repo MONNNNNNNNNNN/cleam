@@ -1232,6 +1232,37 @@ def read_apps() -> list:
     return apps.list_apps()
 
 
+NEEDS_ROOT = ("apt and snap need root, and the menu cannot ask for a password: "
+              "without a cached sudo password, quit and start Cleam with sudo.")
+
+
+def failure(said: str, code: int) -> str:
+    if "password is required" in said:  # sudo -n
+        return NEEDS_ROOT
+    return (said.strip().splitlines() or [f"exit {code}"])[-1]
+
+
+def wait_for_uninstaller(term, app) -> bool:
+    """True once app's entry is gone from the registry; False if the user stops waiting first.
+
+    One program at a time: several wizards at once, each relaunched from
+    %TEMP%, is how people end up clicking through the wrong one. An
+    uninstaller that waited for itself (msiexec /X) is already gone: no prompt.
+    """
+    if not apps.still_listed(app, apps.list_apps()):
+        return True
+    text = [f"{app.name}'s uninstaller runs in its own window, possibly behind this one.",
+            "Finish it there, then come back and press Enter."]
+    while True:
+        action = message(term, "Programs", text, [("Done", "done"), ("Skip", "skip")],
+                         "Enter when its window is finished; S skips")
+        gone = not apps.still_listed(app, apps.list_apps())
+        if gone or action in ("skip", "s", "S", ESC):
+            return gone
+        text = [f"{app.name} is still installed: its uninstaller has not finished, or was cancelled.",
+                "Finish its window and press Enter to check again, or Skip it."]
+
+
 def programs_screen(term, bg: Background) -> None:
     installed = bg.get(term, "apps", "Programs", "Reading installed programs")
     missing = [a for a in installed if apps.uninstaller_missing(a)]
@@ -1263,6 +1294,8 @@ def programs_screen(term, bg: Background) -> None:
             text.append(f"  - {app.name}: force remove, moves {len(plans[app.id])} items to a backup")
         else:
             text.append(f"  - {app.name}: runs its own uninstaller")
+    if any(r.data.source in ("apt", "snap") for r in chosen) and not is_admin():
+        text += ["", NEEDS_ROOT]
     if not confirm(term, "Programs", text, "Go ahead?"):
         return
     progress = Progress(term, "Programs", len(chosen))
@@ -1282,8 +1315,12 @@ def programs_screen(term, bg: Background) -> None:
             continue
         progress.step(f"Running {app.name}'s uninstaller" + (" (in its own window)" if app.source == "registry" else ""))
         code, said = apps.uninstall(app, capture=True, timeout=1800)
-        progress.add(f"{mark(code == 0)}{app.name}: " + ("uninstalled" if code == 0 else
-                     (said.strip().splitlines() or [f"exit {code}"])[-1]))
+        if code == 0 and app.source == "registry" and not wait_for_uninstaller(term, app):
+            # Still listed: its files are still in use, so scanning for "leftovers" would offer the program itself.
+            progress.add(f"{mark(False)}{app.name}: still installed (not finished or cancelled). Leftovers were not "
+                         f"looked for; after it is gone: cleam leftovers \"{app.name}\"")
+            continue
+        progress.add(f"{mark(code == 0)}{app.name}: " + ("uninstalled" if code == 0 else failure(said, code)))
         if code == 0:
             found = leftovers.scan(app.name, install_dir=app.install_dir,
                                    other_apps=tuple(n for n in names if n != app.name))

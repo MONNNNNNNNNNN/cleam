@@ -72,6 +72,15 @@ def list_apps() -> list[App]:
     return sorted(apps, key=lambda a: a.name.lower())
 
 
+def still_listed(app: App, current: list[App]) -> bool:
+    """Whether app's entry is in a fresh listing -- the only proof an uninstaller finished.
+
+    A Windows uninstaller's exit code proves nothing: NSIS copies itself to
+    %TEMP% (Au_.exe), starts the copy and exits 0 while its wizard is still open.
+    """
+    return any(a.source == app.source and (a.key or a.id) == (app.key or app.id) for a in current)
+
+
 def uninstall(app: App, capture: bool = False, timeout: float | None = None) -> tuple[int, str]:
     """(exit code, output). capture=True is for the menu, whose screen is not a free terminal.
 

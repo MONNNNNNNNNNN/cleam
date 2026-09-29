@@ -320,12 +320,14 @@ class NewScreens(unittest.TestCase):
         bg = FakeBackground(apps=[broken, fine])
         folder = leftovers.Leftover("folder", "C:\\Broken", "own", "high")
         remnant = leftovers.Leftover("folder", "C:\\Users\\u\\AppData\\Roaming\\Fine", "left", "high")
-        # Tick both (the cursor starts on Broken), Uninstall, Yes, Yes to the leftovers, OK.
+        # Tick both (the cursor starts on Broken), Uninstall, Yes, Yes to the leftovers, OK. Fine's entry
+        # is already gone when its uninstaller returns, so there is no Done prompt.
         keys = [tui.SPACE, tui.DOWN, tui.SPACE, tui.ENTER, "y", "y", tui.ENTER]
         with mock.patch.object(apps, "uninstaller_missing", side_effect=lambda a: a is broken), \
                 mock.patch.object(leftovers, "force_plan", return_value=([folder], "")), \
                 mock.patch.object(leftovers, "remove", return_value=(Path("/backup"), [])) as move, \
                 mock.patch.object(apps, "uninstall", return_value=(0, "")) as run, \
+                mock.patch.object(apps, "list_apps", return_value=[broken]), \
                 mock.patch.object(leftovers, "scan", return_value=[remnant]):
             tui.programs_screen(FakeTerminal(keys), bg)
         run.assert_called_once()
@@ -333,6 +335,53 @@ class NewScreens(unittest.TestCase):
         self.assertEqual(move.call_args_list[0], mock.call([folder], label="Broken", stop_on_error=True))
         self.assertEqual(move.call_args_list[1], mock.call([remnant], label="Fine"))
         self.assertEqual(bg.refreshed, ["apps"])
+
+    def test_programs_waits_for_a_relaunched_uninstaller(self):
+        """NSIS exits 0 while its wizard is still open: no leftovers scan until the entry is gone."""
+        fine = apps.App("F", "Fine", "2", "registry", "x", key="HKLM\\...\\F")
+        # Uninstall, Yes, (still listed right after it returned) Done, still listed, Done again, gone, OK.
+        keys = [tui.SPACE, tui.ENTER, "y", tui.ENTER, tui.ENTER, tui.ENTER]
+        term = FakeTerminal(keys)
+        with mock.patch.object(apps, "uninstaller_missing", return_value=False), \
+                mock.patch.object(apps, "uninstall", return_value=(0, "")), \
+                mock.patch.object(apps, "list_apps", side_effect=[[fine], [fine], []]) as reread, \
+                mock.patch.object(leftovers, "scan", return_value=[]) as scan:
+            tui.programs_screen(term, FakeBackground(apps=[fine]))
+        self.assertEqual(reread.call_count, 3)
+        scan.assert_called_once()
+        self.assertTrue(any("Fine: uninstalled" in line for line in term.frame))
+
+    def test_programs_msiexec_that_waited_needs_no_prompt(self):
+        fine = apps.App("F", "Fine", "2", "registry", "x")
+        term = FakeTerminal([tui.SPACE, tui.ENTER, "y", tui.ENTER])  # no Done in between
+        with mock.patch.object(apps, "uninstaller_missing", return_value=False), \
+                mock.patch.object(apps, "uninstall", return_value=(0, "")), \
+                mock.patch.object(apps, "list_apps", return_value=[]), \
+                mock.patch.object(leftovers, "scan", return_value=[]) as scan:
+            tui.programs_screen(term, FakeBackground(apps=[fine]))
+        scan.assert_called_once()
+
+    def test_programs_skipped_uninstaller_never_scans_leftovers(self):
+        fine = apps.App("F", "Fine", "2", "registry", "x")
+        term = FakeTerminal([tui.SPACE, tui.ENTER, "y", "s", tui.ENTER])
+        with mock.patch.object(apps, "uninstaller_missing", return_value=False), \
+                mock.patch.object(apps, "uninstall", return_value=(0, "")), \
+                mock.patch.object(apps, "list_apps", return_value=[fine]), \
+                mock.patch.object(leftovers, "scan") as scan:
+            tui.programs_screen(term, FakeBackground(apps=[fine]))
+        scan.assert_not_called()
+        self.assertTrue(any("still installed" in line for line in term.frame))
+
+    def test_programs_apt_without_root_says_start_with_sudo(self):
+        pkg = apps.App("htop", "htop", "3", "apt", ["apt-get", "remove", "htop"])
+        term = FakeTerminal([tui.SPACE, tui.ENTER, "y", tui.ENTER])
+        with mock.patch.object(apps, "uninstaller_missing", return_value=False), \
+                mock.patch.object(tui, "is_admin", return_value=False), \
+                mock.patch.object(apps, "uninstall", return_value=(1, "sudo: a password is required")), \
+                mock.patch.object(leftovers, "scan") as scan:
+            tui.programs_screen(term, FakeBackground(apps=[pkg]))
+        scan.assert_not_called()
+        self.assertTrue(any("start Cleam with sudo" in line for line in term.frame))
 
     def test_programs_does_nothing_without_a_yes(self):
         fine = apps.App("F", "Fine", "2", "registry", "x")

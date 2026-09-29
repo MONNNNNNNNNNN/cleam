@@ -18,6 +18,11 @@
     [Net.ServicePointManager]::SecurityProtocol = [Net.ServicePointManager]::SecurityProtocol -bor [Net.SecurityProtocolType]::Tls12
 
     function Get-Exe([string]$tag) { Join-Path $dir "cleam-$tag.exe" }
+    # What the removed window (run.ps1, up to v0.1.4) left here: ~61 MiB per
+    # cleam-gui-<tag>.exe and its release.txt. A copy that is still open is
+    # locked and goes on the next run.
+    Get-ChildItem $dir -Filter 'cleam-gui-*' -File | Remove-Item -Force -ErrorAction SilentlyContinue
+    Remove-Item (Join-Path $dir 'release.txt') -Force -ErrorAction SilentlyContinue
     $have = if (Test-Path $stamp) { (Get-Content $stamp -Raw).Trim() } else { '' }
     # Asking GitHub for the newest release costs 1-2 s in Windows PowerShell,
     # so a copy that was checked in the last 6 hours starts straight away.
@@ -45,7 +50,7 @@
         }
         Set-Content -Path $stamp -Value $release.tag_name
         $have = $release.tag_name
-        Get-ChildItem $dir -Filter 'cleam-v*.exe' | Where-Object { $_.FullName -ne $exe } |
+        Get-ChildItem $dir -Filter 'cleam-v*.exe*' | Where-Object { $_.FullName -ne $exe } |
             Remove-Item -Force -ErrorAction SilentlyContinue
     } catch {
         if (-not $have -or -not (Test-Path (Get-Exe $have))) {

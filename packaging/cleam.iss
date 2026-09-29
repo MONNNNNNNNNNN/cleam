@@ -32,6 +32,10 @@ ArchitecturesInstallIn64BitMode=x64compatible
 Source: "..\dist\cleam.exe"; DestDir: "{app}"; Flags: ignoreversion
 Source: "..\README.md"; DestDir: "{app}"; Flags: ignoreversion isreadme
 
+[InstallDelete]
+; Up to v0.1.4 the installer also shipped the window; an upgrade must not leave it behind.
+Type: files; Name: "{app}\cleam-gui.exe"
+
 [Icons]
 Name: "{group}\Cleam"; Filename: "{app}\cleam.exe"; Parameters: "menu"
 Name: "{group}\Uninstall Cleam"; Filename: "{uninstallexe}"

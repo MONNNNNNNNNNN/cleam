@@ -16,7 +16,8 @@ It downloads the command-line build from the latest release into
 `%LOCALAPPDATA%\Cleam\portable`, checks it against the SHA-256 GitHub
 publishes, and opens the menu in the same window: Overview, Clean junk,
 Programs, Debloat, System check, Snapshots and Undo. Later runs start at once
-and only download when there is a newer release. Use an elevated PowerShell
+and only download when there is a newer release. It also deletes what the
+old window (`run.ps1`, up to v0.1.4) downloaded there. Use an elevated PowerShell
 for machine-wide settings and system junk. On Linux and macOS, bare `cleam`
 opens the same menu.
 
@@ -86,8 +87,12 @@ cleam --help               # every page as a command, for scripts
 Or, without installing: `PYTHONPATH=src python -m cleam --help`.
 
 In the menu, **Programs** takes several programs in one pass: each runs its
-own uninstaller, one whose uninstaller is missing is force-removed into a
-backup instead, and what they leave behind is offered once at the end. The
+own uninstaller, one at a time, one whose uninstaller is missing is
+force-removed into a backup instead, and what they leave behind is offered
+once at the end. A Windows uninstaller window is waited for: leftovers are
+only looked for once the program is gone from the installed list. On Linux,
+apt and snap need root and the menu cannot ask for a password, so start it
+with `sudo cleam` unless a sudo password is cached. The
 menu and the command line call the same core, so they can never disagree
 about what a clean would delete. The Recycle Bin / Trash is never pre-ticked;
 it is the only undo you have.

@@ -58,6 +58,30 @@ jobs:
           & $exe scan
           if ($LASTEXITCODE -ne 0) { throw "installed cleam.exe scan exited $LASTEXITCODE" }
           "CLEAM_DIR=$(Split-Path $exe)" >> $env:GITHUB_ENV
+      - name: Upgrade over a v0.1.4 install removes the old window
+        shell: pwsh
+        run: |
+          $gui = Join-Path $env:CLEAM_DIR 'cleam-gui.exe'
+          Copy-Item (Join-Path $env:CLEAM_DIR 'cleam.exe') $gui
+          $setup = (Get-ChildItem dist-installer\*.exe)[0].FullName
+          Start-Process -FilePath $setup -ArgumentList '/VERYSILENT','/SUPPRESSMSGBOXES','/NORESTART' -Wait
+          if (Test-Path $gui) { throw "upgrade left cleam-gui.exe behind" }
+          if (-not (Test-Path (Join-Path $env:CLEAM_DIR 'cleam.exe'))) { throw "upgrade lost cleam.exe" }
+      - name: menu.ps1 clears what run.ps1 downloaded
+        shell: pwsh
+        run: |
+          # A copy checked minutes ago, so menu.ps1 starts it without asking
+          # GitHub; the menu itself exits 2 here (no interactive console).
+          $dir = Join-Path $env:LOCALAPPDATA 'Cleam\portable'
+          New-Item -ItemType Directory -Force -Path $dir | Out-Null
+          Copy-Item dist\cleam.exe (Join-Path $dir 'cleam-v9.9.9.exe')
+          Set-Content (Join-Path $dir 'cli-release.txt') 'v9.9.9'
+          $old = 'cleam-gui-v0.1.4.exe', 'cleam-gui-v0.1.3.exe.part', 'release.txt'
+          foreach ($f in $old) { Set-Content (Join-Path $dir $f) 'old' }
+          Get-Content menu.ps1 -Raw | Invoke-Expression
+          foreach ($f in $old) { if (Test-Path (Join-Path $dir $f)) { throw "menu.ps1 left $f behind" } }
+          if (-not (Test-Path (Join-Path $dir 'cleam-v9.9.9.exe'))) { throw "menu.ps1 removed the current copy" }
+          Get-ChildItem $dir
       - name: Uninstall silently
         shell: pwsh
         run: |
