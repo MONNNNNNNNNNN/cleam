@@ -390,5 +390,51 @@ class TasksAndServices(unittest.TestCase):
         self.assertFalse(s.StartupItem("ResetHelper", "", "Scheduled task", r"C:\Tools\reset.exe").protective)
 
 
+
+class Persistence(unittest.TestCase):
+    """Winlogon, IFEO, AppInit and WMI: listed only when they differ from a clean Windows."""
+
+    def test_a_clean_winlogon_lists_nothing(self):
+        clean = {"HKLM": {"Shell": "explorer.exe", "Userinit": "C:\\Windows\\system32\\userinit.exe,"}, "HKCU": {}}
+        self.assertEqual(s.winlogon_items(clean), [])
+
+    def test_an_extra_userinit_program_and_a_replaced_shell_are_flagged(self):
+        bad = {"HKLM": {"Shell": "explorer.exe, C:\\ProgramData\\svc.exe",
+                        "Userinit": "C:\\Windows\\system32\\userinit.exe, C:\\Users\\u\\AppData\\x.exe,"},
+               "HKCU": {"Shell": "C:\\kiosk.exe"}}
+        items = s.winlogon_items(bad)
+        self.assertEqual([i.key for i in items],
+                         ["HKLM:Shell", "HKLM:Userinit:C:\\Users\\u\\AppData\\x.exe", "HKCU:Shell"])
+        self.assertTrue(all(i.suspicious and i.kind == "winlogon" for i in items))
+
+    def test_ifeo_debugger_is_flagged_but_process_explorer_replacing_task_manager_is_not(self):
+        items = s.ifeo_items({"sethc.exe": "C:\\Windows\\System32\\cmd.exe",
+                              "taskmgr.exe": '"C:\\Tools\\procexp64.exe"'},
+                             {"notepad.exe": "C:\\Users\\u\\AppData\\evil.exe"})
+        by = {i.key: i for i in items}
+        self.assertIn("instead of sethc.exe", " ".join(by["sethc.exe"].reasons))  # the sticky-keys backdoor
+        self.assertEqual(by["taskmgr.exe"].reasons, [])
+        self.assertIn("closes", " ".join(by["exit:notepad.exe"].reasons))
+
+    def test_appinit_counts_only_while_loading_is_on(self):
+        self.assertEqual(s.appinit_items("C:\\x.dll", 0), [])
+        self.assertEqual([i.name for i in s.appinit_items("C:\\a.dll, C:\\b.dll", 1)], ["a.dll", "b.dll"])
+
+    def test_wmi_consumers_are_flagged_and_unbound_ones_are_off(self):
+        rows = [{"name": "Updater", "kind": "CommandLineEventConsumer", "command": "C:\\u\\up.exe -q", "bound": True},
+                {"name": "Beacon", "kind": "ActiveScriptEventConsumer", "text": "GetObject(...)", "bound": False}]
+        items = s.wmi_items(rows)
+        self.assertEqual([(i.name, i.enabled) for i in items], [("Updater", True), ("Beacon", False)])
+        self.assertTrue(items[1].command.startswith("script: "))
+        self.assertTrue(all(i.suspicious for i in items))
+        self.assertEqual(s.wmi_items({"name": "One", "kind": "CommandLineEventConsumer", "exe": "x.exe"})[0].name, "One")
+
+    def test_startup_keeps_reasons_set_before_judging(self):
+        item = s.StartupItem("x", "", "Image File Execution Options", kind="ifeo", key="sethc.exe",
+                             reasons=["starts instead of sethc.exe every time sethc.exe is run"])
+        with mock.patch.object(s, "OS", "linux"), mock.patch.object(s, "_xdg_startup", return_value=[item]):
+            [out] = s.startup()
+        self.assertIn("starts instead of sethc.exe every time sethc.exe is run", out.reasons)
+
 if __name__ == "__main__":
     unittest.main()

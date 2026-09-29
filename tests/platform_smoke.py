@@ -206,6 +206,20 @@ def smoke_startup() -> None:
                and i["reasons"] == ["the program it starts does not exist"]]
     check("no Windows task is flagged only as missing", not missing, ", ".join(missing)[:160])
 
+    # A planted IFEO debugger (a harmless one, for an exe that does not exist) must be listed.
+    import winreg
+    ifeo = r"SOFTWARE\Microsoft\Windows NT\CurrentVersion\Image File Execution Options\cleamsmoketest.exe"
+    with winreg.CreateKeyEx(winreg.HKEY_LOCAL_MACHINE, ifeo, 0, winreg.KEY_SET_VALUE | winreg.KEY_WOW64_64KEY) as k:
+        winreg.SetValueEx(k, "Debugger", 0, winreg.REG_SZ, r"C:\Windows\System32\cmd.exe")
+    try:
+        found = [i for i in json.loads(cleam("startup", "--json").stdout) if i["id"] == "ifeo:cleamsmoketest.exe"]
+        check("a planted IFEO debugger is listed and flagged", bool(found) and bool(found[0]["reasons"]),
+              found[0]["reasons"][0] if found and found[0]["reasons"] else "missing")
+    finally:
+        winreg.DeleteKeyEx(winreg.HKEY_LOCAL_MACHINE, ifeo, winreg.KEY_WOW64_64KEY, 0)
+    clean = [i["id"] for i in items if i["kind"] in ("winlogon", "appinit")]
+    check("a clean Windows has no Winlogon or AppInit entries", not clean, ", ".join(clean)[:160])
+
     # A throwaway task, switched off and back on through the journal.
     name = "CleamSmokeTest"
     ps = ["powershell", "-NoProfile", "-NonInteractive", "-Command"]

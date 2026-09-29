@@ -1230,7 +1230,8 @@ def check_topics(checks, items, signs) -> list[Topic]:
                                    "", [])]))
     startup = []
     journal = debloat.load_journal()
-    kinds = {"task": "task", "service": "service"}
+    kinds = {"task": "task", "service": "service", "winlogon": "Winlogon", "ifeo": "IFEO", "appinit": "AppInit",
+             "wmi": "WMI"}
     for i in items:
         detail = ((f"{kinds[i.kind]} {G.sep} " if i.kind in kinds else "") + (i.publisher or i.path or i.command)
                   + ("" if i.enabled else "  (turned off)"))

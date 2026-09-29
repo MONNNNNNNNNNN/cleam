@@ -300,6 +300,15 @@ files. Nothing in it deletes, quarantines or disables anything.
   tasks like `BthUdTask.exe` and Run entries like `rundll32.exe x.dll,Entry`
   name no folder, and read as "does not exist" (a false WARN with a Turn off
   button on Windows' own task) before this.
+- **Deeper persistence (2026-09-29), read-only:** Winlogon Shell/Userinit
+  that are not Windows' own (plus any HKCU override), IFEO `Debugger` and
+  `SilentProcessExit\MonitorProcess` (both registry views; Process Explorer
+  replacing taskmgr.exe is the one legitimate case), `AppInit_DLLs` while
+  `LoadAppInit_DLLs=1`, and WMI `CommandLine`/`ActiveScript` event consumers
+  (read in the same PowerShell call; `enabled` = bound to a filter). Only what
+  differs from a clean Windows is listed, so a clean PC shows none. No switch:
+  a wrong Winlogon write locks everyone out; removal is the antivirus's job.
+  `startup()` merges `judge()` into reasons already set, never replaces them.
 - `security._powershell` forces UTF-8 output: the default OEM code page read
   as ANSI raised UnicodeDecodeError on a service name like "für".
 

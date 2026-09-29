@@ -263,7 +263,11 @@ debloat reverses them). From scripts: `cleam security --fix` lists them,
   the Run keys and Startup folders, scheduled tasks (every one outside
   `\Microsoft\`, plus any inside it that runs something not from Windows),
   and automatic services that are not Windows' own (unquoted service paths
-  are flagged). Any entry can be switched off: Run keys and Startup folders
+  are flagged), plus the places malware hides beyond those: a replaced
+  Winlogon shell or extra Userinit program, Image File Execution Options
+  hijacks (the sticky-keys backdoor), AppInit DLLs and WMI event
+  subscriptions. These last ones are listed only when they differ from a
+  clean Windows, and are reported, never switched. Any entry can be switched off: Run keys and Startup folders
   with Task Manager's own switch; tasks are disabled and services set to
   manual through the debloat journal, so Undo debloat or `--on` restores
   them exactly. Antivirus, firewall and backup software is never offered.
