@@ -79,6 +79,9 @@ jobs:
           $old = 'cleam-gui-v0.1.4.exe', 'cleam-gui-v0.1.3.exe.part', 'release.txt'
           foreach ($f in $old) { Set-Content (Join-Path $dir $f) 'old' }
           Get-Content menu.ps1 -Raw | Invoke-Expression
+          # The menu's exit 2 would otherwise become the step's exit code.
+          if ($LASTEXITCODE -ne 2) { throw "cleam menu exited $LASTEXITCODE, expected 2 (no console)" }
+          $global:LASTEXITCODE = 0
           foreach ($f in $old) { if (Test-Path (Join-Path $dir $f)) { throw "menu.ps1 left $f behind" } }
           if (-not (Test-Path (Join-Path $dir 'cleam-v9.9.9.exe'))) { throw "menu.ps1 removed the current copy" }
           Get-ChildItem $dir
