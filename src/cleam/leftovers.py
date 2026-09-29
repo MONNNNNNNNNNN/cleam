@@ -21,6 +21,7 @@ import json
 import os
 import re
 import shutil
+import stat
 import subprocess
 import time
 from dataclasses import asdict, dataclass, field
@@ -241,7 +242,9 @@ def forced(name: str, install_dir: str, reg_key: str = "", other_names: tuple[st
     folder = Path(install_dir)
     if not folder.is_absolute() or not os.path.isdir(folder):
         return [], f"{install_dir} is not a folder on this PC"
-    if os.path.normcase(os.path.realpath(folder)) != os.path.normcase(os.path.abspath(folder)):
+    # The folder itself, not its ancestors: macOS /var and /tmp are symlinks.
+    own = os.lstat(folder)
+    if stat.S_ISLNK(own.st_mode) or getattr(own, "st_file_attributes", 0) & 0x400:  # 0x400: reparse point (junction)
         return [], f"{install_dir} is a link to somewhere else; name the real folder with --install-dir"
     shared = {os.path.normcase(os.path.abspath(p)) for p, _ in _roots()}  # AppData, ProgramData, Start Menu...
     for extra in ("LOCALAPPDATA", "ProgramFiles", "ProgramFiles(x86)", "CommonProgramFiles", "CommonProgramFiles(x86)"):
