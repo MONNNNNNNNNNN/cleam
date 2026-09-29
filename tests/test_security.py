@@ -326,6 +326,13 @@ class TasksAndServices(unittest.TestCase):
         with mock.patch.object(s.shutil, "which", return_value=None):
             self.assertEqual(s.program_of("nothing-here.exe --x"), "nothing-here.exe")  # unknown stays as written
 
+    def test_a_windows_task_whose_program_is_absent_from_windows_is_hidden(self):
+        # Windows Server has USO_UxBroker but not MusNotification.exe: a leftover, nothing runs.
+        gone = os.path.join(self.windir, "MusNotification.exe")
+        rows = [{"path": "\\Microsoft\\Windows\\UpdateOrchestrator\\USO_UxBroker", "state": 3, "exec": gone},
+                {"path": "\\Microsoft\\Windows\\Fake", "state": 3, "exec": r"C:\Users\u\AppData\Local\gone.exe"}]
+        self.assertEqual([i.name for i in s.task_items(rows, self.env)], ["Fake"])  # outside Windows: still shown
+
     def test_services_outside_windows_are_listed_svchost_ones_are_not(self):
         rows = [
             {"name": "Dnscache", "display": "DNS Client", "mode": "Auto",

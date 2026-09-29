@@ -202,7 +202,7 @@ def smoke_startup() -> None:
     check("svchost services are not listed", not any(i["kind"] == "service" and i["path"].lower().endswith(
         "svchost.exe") for i in items))
     # Windows' own tasks that name a bare program ("BthUdTask.exe") must not read as missing.
-    missing = [i["key"] for i in items if i["kind"] == "task" and i["key"].lower().startswith("\\microsoft\\")
+    missing = [f'{i["key"]} ({i["path"]})' for i in items if i["kind"] == "task" and i["key"].lower().startswith("\\microsoft\\")
                and i["reasons"] == ["the program it starts does not exist"]]
     check("no Windows task is flagged only as missing", not missing, ", ".join(missing)[:160])
 
