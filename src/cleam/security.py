@@ -711,21 +711,29 @@ TASK_TRIGGERS = {"LogonTrigger": "at sign-in", "BootTrigger": "at startup", "Ses
 
 
 def program_of(command: str) -> str:
-    """The executable a Run-key command line starts, with %VARS% expanded."""
+    """The executable a command line starts, with %VARS% expanded and a bare
+    name ("BthUdTask.exe", "rundll32.exe") looked up on PATH the way Windows
+    does -- otherwise it reads as a program that does not exist."""
     # %VAR% by hand: os.path.expandvars leaves %VAR% alone off Windows, and
     # these are always Windows command lines.
     command = re.sub(r"%([^%]+)%", lambda m: os.environ.get(m.group(1), m.group(0)), command.strip())
     if command.startswith('"'):
         end = command.find('"', 1)
-        return command[1:end] if end > 0 else command[1:]
+        return _on_path(command[1:end] if end > 0 else command[1:])
     lower = command.lower()
     for ext in (".exe", ".bat", ".cmd", ".com", ".vbs", ".js", ".ps1", ".lnk"):
         at = lower.find(ext + " ")
         if at < 0 and lower.endswith(ext):
             at = len(lower) - len(ext)
         if at >= 0:
-            return command[: at + len(ext)]
-    return command.split(" ", 1)[0]
+            return _on_path(command[: at + len(ext)])
+    return _on_path(command.split(" ", 1)[0])
+
+
+def _on_path(program: str) -> str:
+    if not program or "\\" in program or "/" in program:
+        return program
+    return shutil.which(program) or program
 
 
 def judge(item: StartupItem, env: dict[str, str] | None = None) -> list[str]:

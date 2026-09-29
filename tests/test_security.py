@@ -2,6 +2,7 @@ import os
 import sys
 import tempfile
 import unittest
+from unittest import mock
 from pathlib import Path
 
 from cleam import security as s
@@ -314,6 +315,16 @@ class TasksAndServices(unittest.TestCase):
         ]
         names = [i.name for i in s.task_items(rows, self.env)]
         self.assertEqual(names, ["Sync", "Cache", "Helper"])
+
+    def test_a_bare_program_name_is_looked_up_on_path_not_called_missing(self):
+        # \\Microsoft\\Windows\\Bluetooth\\UninstallDeviceTask runs "BthUdTask.exe", no folder.
+        row = {"path": "\\Microsoft\\Windows\\Bluetooth\\UninstallDeviceTask", "state": 3,
+               "exec": "BthUdTask.exe", "args": "$(Arg0)"}
+        with mock.patch.object(s.shutil, "which", return_value=self.defrag):
+            self.assertEqual(s.task_items([row], self.env), [])  # Windows' own: hidden
+            self.assertEqual(s.program_of("rundll32.exe x.dll,Run"), self.defrag)
+        with mock.patch.object(s.shutil, "which", return_value=None):
+            self.assertEqual(s.program_of("nothing-here.exe --x"), "nothing-here.exe")  # unknown stays as written
 
     def test_services_outside_windows_are_listed_svchost_ones_are_not(self):
         rows = [
