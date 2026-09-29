@@ -816,11 +816,143 @@ def _windows_startup() -> list[StartupItem]:
     env = dict(os.environ)
     items += task_items(raw.get("tasks"), env)
     items += service_items(raw.get("services"), env, _cleam_switched_off())
+    items += _persistence(winreg) + wmi_items(raw.get("wmi"))
     _signatures(items)
     return hide_microsoft(items)
 
 
-# One PowerShell call for both (its start-up is most of the cost). Only tasks
+# ---- where malware persists beyond Run keys, tasks and services (read-only)
+#
+# Autoruns covers these; Task Manager does not. Cleam lists and explains them
+# but offers no switch: a wrong Winlogon value stops anyone logging on, and
+# the right answer to an IFEO hijack or a WMI subscription is the antivirus.
+# Only what differs from a clean Windows is listed, so a clean PC shows none.
+
+WINLOGON = r"SOFTWARE\Microsoft\Windows NT\CurrentVersion\Winlogon"
+IFEO = r"SOFTWARE\Microsoft\Windows NT\CurrentVersion\Image File Execution Options"
+SILENT_EXIT = r"SOFTWARE\Microsoft\Windows NT\CurrentVersion\SilentProcessExit"
+WINDOWS_KEY = r"SOFTWARE\Microsoft\Windows NT\CurrentVersion\Windows"
+# Process Explorer's "Replace Task Manager" is the one common legitimate IFEO debugger.
+TASKMGR_REPLACEMENTS = {"procexp.exe", "procexp64.exe", "procexp64a.exe", "systeminformer.exe", "processhacker.exe"}
+
+
+def winlogon_items(values: dict[str, dict]) -> list[StartupItem]:
+    """Winlogon Shell/Userinit that are not Windows' own. values: {"HKLM"|"HKCU": {"Shell": ..., "Userinit": ...}}."""
+    items = []
+    machine = values.get("HKLM") or {}
+    shell = str(machine.get("Shell") or "explorer.exe").strip()
+    if ntpath.basename(shell).lower() != "explorer.exe":
+        items.append(StartupItem("Winlogon Shell", shell, "HKLM\\" + WINLOGON, program_of(shell), kind="winlogon",
+                                 key="HKLM:Shell", reasons=["replaces the Windows desktop (Explorer) at sign-in"]))
+    for part in str(machine.get("Userinit") or "").split(","):
+        part = part.strip()
+        if part and ntpath.basename(program_of(part)).lower() != "userinit.exe":
+            items.append(StartupItem(f"Winlogon Userinit: {ntpath.basename(program_of(part))}", part,
+                                     "HKLM\\" + WINLOGON, program_of(part), kind="winlogon", key=f"HKLM:Userinit:{part}",
+                                     reasons=["runs at every sign-in next to userinit.exe"]))
+    for name, value in (values.get("HKCU") or {}).items():
+        if str(value or "").strip():
+            items.append(StartupItem(f"Winlogon {name} (this user)", str(value), "HKCU\\" + WINLOGON,
+                                     program_of(str(value)), kind="winlogon", key=f"HKCU:{name}",
+                                     reasons=[f"a per-user {name} override, which Windows never sets itself"]))
+    return items
+
+
+def ifeo_items(debuggers: dict[str, str], monitors: dict[str, str]) -> list[StartupItem]:
+    """Image File Execution Options hijacks: a Debugger starts instead of the
+    program; a SilentProcessExit MonitorProcess starts when it exits."""
+    items = []
+    for exe, command in sorted(debuggers.items()):
+        program = program_of(command)
+        legit = exe.lower() == "taskmgr.exe" and ntpath.basename(program).lower() in TASKMGR_REPLACEMENTS
+        items.append(StartupItem(f"{exe} is replaced", command, "Image File Execution Options", program,
+                                 kind="ifeo", key=exe,
+                                 reasons=[] if legit else [f"starts instead of {exe} every time {exe} is run"]))
+    for exe, command in sorted(monitors.items()):
+        items.append(StartupItem(f"runs when {exe} exits", command, "SilentProcessExit", program_of(command),
+                                 kind="ifeo", key=f"exit:{exe}", reasons=[f"starts whenever {exe} closes"]))
+    return items
+
+
+def appinit_items(dlls: str, load: int) -> list[StartupItem]:
+    """AppInit_DLLs: loaded into every program with a window, while LoadAppInit_DLLs is 1."""
+    if load != 1:
+        return []
+    return [StartupItem(ntpath.basename(dll), dll, "AppInit_DLLs", dll, kind="appinit", key=dll,
+                        reasons=["loaded into every program that has a window"])
+            for dll in re.split(r"[,\s]+", dlls or "") if dll]
+
+
+def wmi_items(rows) -> list[StartupItem]:
+    """WMI event consumers that run a command or a script: fileless persistence."""
+    items = []
+    for r in _as_list(rows):
+        if not isinstance(r, dict) or not r.get("name"):
+            continue
+        script = r.get("kind") == "ActiveScriptEventConsumer"
+        command = (r.get("script") or ("script: " + str(r.get("text") or "")[:120])) if script \
+            else (r.get("command") or r.get("exe") or "")
+        items.append(StartupItem(str(r["name"]), str(command), "WMI event subscription",
+                                 "" if script else program_of(str(r.get("exe") or command)),
+                                 enabled=bool(r.get("bound")), kind="wmi", key=str(r["name"]),
+                                 reasons=["runs a " + ("script" if script else "program")
+                                          + " when a WMI event fires, a place malware hides without any file in Startup"]))
+    return items
+
+
+def _persistence(winreg) -> list[StartupItem]:
+    """Read the Winlogon, IFEO and AppInit values; the judging is in the pure functions above."""
+    hklm, hkcu = winreg.HKEY_LOCAL_MACHINE, winreg.HKEY_CURRENT_USER
+
+    def read(hive, key, names, view=0) -> dict:
+        found = {}
+        try:
+            with winreg.OpenKey(hive, key, 0, winreg.KEY_READ | view) as k:
+                for name in names:
+                    try:
+                        found[name] = winreg.QueryValueEx(k, name)[0]
+                    except OSError:
+                        pass
+        except OSError:
+            pass
+        return found
+
+    def subkeys(key, view) -> list[str]:
+        out = []
+        try:
+            with winreg.OpenKey(hklm, key, 0, winreg.KEY_READ | view) as k:
+                i = 0
+                while True:
+                    try:
+                        out.append(winreg.EnumKey(k, i))
+                    except OSError:
+                        return out
+                    i += 1
+        except OSError:
+            return out
+
+    debuggers: dict[str, str] = {}
+    monitors: dict[str, str] = {}
+    appinit: list[StartupItem] = []
+    for view in (winreg.KEY_WOW64_64KEY, winreg.KEY_WOW64_32KEY):
+        for exe in subkeys(IFEO, view):
+            value = read(hklm, f"{IFEO}\\{exe}", ("Debugger",), view).get("Debugger")
+            if isinstance(value, str) and value.strip():
+                debuggers.setdefault(exe.lower(), value)
+        for exe in subkeys(SILENT_EXIT, view):
+            value = read(hklm, f"{SILENT_EXIT}\\{exe}", ("MonitorProcess",), view).get("MonitorProcess")
+            if isinstance(value, str) and value.strip():
+                monitors.setdefault(exe.lower(), value)
+        win = read(hklm, WINDOWS_KEY, ("AppInit_DLLs", "LoadAppInit_DLLs"), view)
+        appinit += appinit_items(str(win.get("AppInit_DLLs") or ""), int(win.get("LoadAppInit_DLLs") or 0))
+    winlogon = {"HKLM": read(hklm, WINLOGON, ("Shell", "Userinit"), winreg.KEY_WOW64_64KEY),
+                "HKCU": read(hkcu, WINLOGON, ("Shell", "Userinit"))}
+    unique = {i.key.lower(): i for i in appinit}  # both views often hold the same DLL
+    return winlogon_items(winlogon) + ifeo_items(debuggers, monitors) + list(unique.values())
+
+
+# One PowerShell call for tasks, services and WMI consumers (its start-up is
+# most of the cost). Only tasks
 # with a program to run, or a COM handler, and every service: the filtering is
 # Python, so it is tested off Windows. State and start mode are enum numbers
 # and invariant names, never translated text.
@@ -833,7 +965,15 @@ $tasks = @(Get-ScheduledTask -ErrorAction SilentlyContinue | ForEach-Object {
 $services = @(Get-CimInstance Win32_Service -ErrorAction SilentlyContinue | ForEach-Object {
   [ordered]@{ name = $_.Name; display = $_.DisplayName; path = "$($_.PathName)"; mode = "$($_.StartMode)";
     delayed = [bool]$_.DelayedAutoStart } })
-[ordered]@{ tasks = $tasks; services = $services } | ConvertTo-Json -Depth 4 -Compress
+$bound = @(Get-CimInstance -Namespace root/subscription -ClassName __FilterToConsumerBinding -ErrorAction SilentlyContinue |
+  ForEach-Object { "$($_.Consumer)" })
+$wmi = @(Get-CimInstance -Namespace root/subscription -ClassName __EventConsumer -ErrorAction SilentlyContinue |
+  Where-Object { $_.CimClass.CimClassName -in 'CommandLineEventConsumer', 'ActiveScriptEventConsumer' } | ForEach-Object {
+  $n = "$($_.Name)"; $t = "$($_.ScriptText)"
+  [ordered]@{ name = $n; kind = $_.CimClass.CimClassName; command = "$($_.CommandLineTemplate)";
+    exe = "$($_.ExecutablePath)"; script = "$($_.ScriptFileName)"; text = $t.Substring(0, [Math]::Min(200, $t.Length));
+    bound = [bool]($bound | Where-Object { $_.Contains($n) }) } })
+[ordered]@{ tasks = $tasks; services = $services; wmi = $wmi } | ConvertTo-Json -Depth 4 -Compress
 """
 
 
@@ -1028,5 +1168,5 @@ def startup() -> list[StartupItem]:
     """Everything that starts with the computer, oddest first."""
     items = _windows_startup() if OS == "windows" else _launchd_startup() if OS == "macos" else _xdg_startup()
     for item in items:
-        item.reasons = judge(item)
+        item.reasons = item.reasons + [r for r in judge(item) if r not in item.reasons]
     return sorted(items, key=lambda i: (not i.suspicious, i.name.lower()))
