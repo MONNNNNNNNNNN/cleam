@@ -15,6 +15,36 @@ class Registry(unittest.TestCase):
             '"C:\\Windows\\System32\\msiexec" /X{AB}',
         )
 
+    def test_the_install_folder_comes_from_location_icon_or_uninstaller(self):
+        self.assertEqual(apps.install_dir_of({"InstallLocation": '"C:\\Program Files\\X\\"'}), "C:\\Program Files\\X")
+        self.assertEqual(apps.install_dir_of({"DisplayIcon": "C:\\Program Files\\Foo Bar\\foo.exe,0"}),
+                         "C:\\Program Files\\Foo Bar")
+        self.assertEqual(apps.install_dir_of({"UninstallString": '"C:\\Users\\u\\AppData\\Local\\Programs\\App'
+                                                                 '\\Uninstall App.exe" /currentuser'}),
+                         "C:\\Users\\u\\AppData\\Local\\Programs\\App")
+
+    def test_shared_installer_folders_are_never_an_install_folder(self):
+        # An MSI's icon and uninstaller live with every other MSI's, not with the program.
+        for values in ({"UninstallString": "MsiExec.exe /X{ABC}"},
+                       {"DisplayIcon": "C:\\Windows\\Installer\\{GUID}\\icon.exe"},
+                       {"UninstallString": '"C:\\ProgramData\\Package Cache\\{x}\\setup.exe" /uninstall'},
+                       {"DisplayIcon": "C:\\Windows\\System32\\shell32.dll,4"}):
+            self.assertEqual(apps.install_dir_of(values), "", values)
+
+    def test_a_registry_app_knows_its_own_entry(self):
+        app = apps.from_registry("Foo", {"DisplayName": "Foo", "UninstallString": "C:\\Foo\\unins000.exe"},
+                                 "HKCU\\" + apps.UNINSTALL_KEY)
+        self.assertEqual(app.key, "HKCU\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\Foo")
+        self.assertEqual(app.install_dir, "C:\\Foo")
+
+    def test_a_missing_uninstaller_is_noticed_but_msi_is_never_judged(self):
+        gone = apps.App("x", "X", "", "registry", '"C:\\nowhere\\unins000.exe" /SILENT')
+        self.assertTrue(apps.uninstaller_missing(gone))
+        self.assertFalse(apps.uninstaller_missing(apps.App("m", "M", "", "registry", "MsiExec.exe /X{AB}")))
+        self.assertFalse(apps.uninstaller_missing(apps.App("a", "A", "", "apt", ["apt", "remove", "a"])))
+        # REG_EXPAND_SZ arrives unexpanded; an unknown variable is never called missing.
+        self.assertFalse(apps.uninstaller_missing(apps.App("v", "V", "", "registry", "%NO_SUCH_VAR%\\x\\unins.exe")))
+
     def test_non_msi_command_is_untouched(self):
         cmd = '"C:\\Program Files\\App\\unins000.exe" /I'
         self.assertEqual(apps.msi_uninstall(cmd), cmd)

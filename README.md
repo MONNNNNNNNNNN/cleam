@@ -129,6 +129,7 @@ cleam clean --yes --only tmp,trash
 
 cleam apps --filter chrome        # installed programs
 cleam uninstall <id> [--snapshot] # runs the program's own uninstaller, asks first
+cleam uninstall <id> --force      # uninstaller gone: move its folder + entry to a backup (cleam restore undoes)
 
 cleam leftovers "Some App"                  # what its uninstaller left behind
 cleam leftovers "Some App" --remove         # move those to a backup and remove them

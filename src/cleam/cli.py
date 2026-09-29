@@ -134,15 +134,25 @@ def cmd_apps(args) -> int:
 
 
 def cmd_uninstall(args) -> int:
-    matches = [a for a in apps.list_apps() if a.id == args.app] or [
-        a for a in apps.list_apps() if a.name.lower() == args.app.lower()
+    installed = apps.list_apps()
+    matches = [a for a in installed if a.id == args.app] or [
+        a for a in installed if a.name.lower() == args.app.lower()
     ]
+    if args.force and not matches and args.install_dir:
+        # Not listed at all (its entry is gone too): the folder the user named is all there is.
+        matches = [apps.App(args.app, args.app, "", "forced", [])]
     if len(matches) != 1:
         print(f"cleam: {len(matches)} apps match {args.app!r}; use the id from `cleam apps`", file=sys.stderr)
         for a in matches:
             print(f"  {a.id}  ({a.name} {a.version})", file=sys.stderr)
         return 2
     app = matches[0]
+    if args.force:
+        return _force_uninstall(app, installed, args)
+    if apps.uninstaller_missing(app):
+        print(f"cleam: {app.name}'s uninstaller is missing ({apps.program_in(app.command)}).\n"
+              f"  `cleam uninstall {app.id} --force` moves the program to a backup instead", file=sys.stderr)
+        return 1
     shown = app.command if isinstance(app.command, str) else " ".join(app.command)
     print(f"Uninstall {app.name} {app.version} ({app.source})\n  {shown}")
     if not args.yes and input("Proceed? [y/N] ").strip().lower() != "y":
@@ -154,6 +164,42 @@ def cmd_uninstall(args) -> int:
     if text:
         print(text)
     return code
+
+
+def _force_uninstall(app, installed, args) -> int:
+    """The uninstaller is gone or broken: move the program's folder, its entry
+    and its high-confidence leftovers into one backup that `cleam restore` undoes."""
+    others = [a for a in installed if a is not app]
+    items, why = leftovers.forced(
+        app.name, args.install_dir or app.install_dir, app.key,
+        other_names=tuple(a.name for a in others),
+        other_dirs=tuple(a.install_dir for a in others if a.install_dir),
+        explicit=bool(args.install_dir),
+    )
+    if why:
+        print(f"cleam: {why}", file=sys.stderr)
+        return 1
+    chosen = [i for i in items if i.confidence == "high"]
+    print(f"Forced uninstall of {app.name}: its own uninstaller is not run. These move to a backup:")
+    for item in chosen:
+        print(f"  {item.kind:<10}{human(item.bytes):>11}  {item.target}")
+    if len(items) > len(chosen):
+        print(f"  ({len(items) - len(chosen)} uncertain matches left alone; see `cleam leftovers`)")
+    if not args.yes and input("Proceed? [y/N] ").strip().lower() != "y":
+        return 1
+    if args.snapshot and not _snapshot(f"Cleam: before force-uninstalling {app.name}"):
+        print("cleam: snapshot failed, nothing removed", file=sys.stderr)
+        return 1
+    # Folder first, and stop at the first failure: a folder still in use must
+    # not end with its Installed-apps entry deleted.
+    backup, errors = leftovers.remove(chosen, label=app.name, stop_on_error=True)
+    for error in errors:
+        print(f"cleam: {error}", file=sys.stderr)
+    if errors:
+        print("cleam: stopped. Close the program (and its tray icon or service), then run this again.",
+              file=sys.stderr)
+    print(f"Backed up to {backup}\nUndo with: cleam restore {backup}")
+    return 1 if errors else 0
 
 
 def cmd_leftovers(args) -> int:
@@ -383,6 +429,11 @@ def parser() -> argparse.ArgumentParser:
     u.add_argument("app", help="id or exact name from `cleam apps`")
     u.add_argument("--yes", action="store_true", help="skip the confirmation prompt")
     u.add_argument("--snapshot", action="store_true", help="take a restore point/snapshot first")
+    u.add_argument("--force", action="store_true",
+                   help="its uninstaller is missing or broken: move its folder and entry to a backup instead "
+                        "(cleam restore undoes it)")
+    u.add_argument("--install-dir", default="", metavar="DIR",
+                   help="with --force: the program's folder, when Cleam cannot work it out or it is not listed")
     u.set_defaults(fn=cmd_uninstall)
 
     lo = sub.add_parser("leftovers", help="what an uninstaller left behind, and remove it reversibly")

@@ -205,7 +205,11 @@ something:
 - **Exclude `sys._MEIPASS`**: a one-file PyInstaller build unpacks into the
   temp dir it cleans.
 - **Uninstall never deletes app files directly** — it runs the registered
-  uninstaller, so the app's own cleanup happens.
+  uninstaller, so the app's own cleanup happens. The one exception is
+  `uninstall --force`, for an uninstaller that is gone: it *moves* the
+  program's folder, its Installed-apps key and its high-confidence leftovers
+  into a backup (`leftovers.forced`), never deletes, and stops at the first
+  failure so a locked folder never ends with its entry deleted.
 
 ## Leftovers (the Revo-style part)
 
@@ -231,9 +235,19 @@ accepting them safe.
 - **`last_path_part()`, not `os.path.basename`.** basename is
   platform-specific, so a Windows install directory parsed on Linux yielded no
   alias at all.
+- **Forced uninstall (2026-09-29):** the folder is `InstallLocation`, else
+  the folder of `DisplayIcon`/`UninstallString` -- never Windows\Installer,
+  the MSI Package Cache or System32, where every MSI's icon and uninstaller
+  live. Guards: `safe_root`, not a link, one Cleam worked out must be named
+  after the program (else `--install-dir` names it), and it must not hold
+  another installed program's folder (living inside one, like a Steam game,
+  is fine). A plain `uninstall` whose uninstaller file is missing says so
+  and points at `--force` instead of failing inside CreateProcess.
+  `remove()` backs a folder up **on its own drive** (`<mount>\.cleam-backups`)
+  when it is not on the backup's: a cross-drive `shutil.move` is copy+delete,
+  which would fill C: with a D: game and could half-delete on a locked file.
 - Still unbuilt from Revo: traced installation (a full registry/filesystem
-  snapshot diff), forced uninstall for broken uninstallers, and an autorun
-  manager. Hunter mode's crosshair overlay needs a transparent always-on-top
+  snapshot diff). Hunter mode's crosshair overlay needs a transparent always-on-top
   window with global mouse hooks — not reachable in Flet; the substitute is
   picking from running processes.
 
