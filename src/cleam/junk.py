@@ -610,7 +610,10 @@ def run(target: Target, delete: bool = False) -> Result:
     if not roots:
         res.skipped = "not present"
         return res
-    cutoff = time.time() - target.min_age_hours * HOUR
+    # No minimum age means any age, with no clock involved: time.time() on
+    # Windows (Python < 3.13) ticks every 15.6 ms and can read earlier than a
+    # file written a moment ago, which then looked "too new" to take.
+    cutoff = time.time() - target.min_age_hours * HOUR if target.min_age_hours else float("inf")
     if target.mode == "command":
         _command([r for r in roots if safe_root(r)], target, delete, res)
         return res
