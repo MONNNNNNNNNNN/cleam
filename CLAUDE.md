@@ -7,10 +7,12 @@ before promising a mobile feature — the OS sandbox forbids most of them.
 
 ## Current state
 
-CLI plus a Flet window. The core is **stdlib only** (no runtime dependencies —
-keeps the portable binary small and the supply chain empty); Flet is an extra,
-`pip install '.[gui]'`. Wanted distribution forms: installer `.exe`, portable
-binary, and command-line scripts. The installer is not started.
+CLI plus the terminal menu (`tui.py`), and nothing else. The one entry for
+users is `irm https://raw.githubusercontent.com/MONNNNNNNNNNN/cleam/main/menu.ps1 | iex`:
+it fetches the CLI build of the latest release and opens the menu. The core
+is **stdlib only** (no runtime dependencies — keeps the portable binary small
+and the supply chain empty). Also built in CI: a portable binary per OS and an
+Inno Setup installer around `cleam.exe` (its shortcut runs `cleam.exe menu`).
 
 ```
 src/cleam/
@@ -20,8 +22,9 @@ src/cleam/
   leftovers.py  remnants an uninstaller left; move-to-backup + restore
   snapshot.py   Windows restore points, Timeshift/Snapper, tmutil
   system.py     OS detection, is_admin(), sudo(), output()
-  cli.py        argparse; entry point `cleam`
-  gui.py        Flet window; entry point `cleam-gui`
+  cli.py        argparse; entry point `cleam` (bare `cleam` in a TTY opens the menu)
+  tui.py        the terminal menu: Overview, Clean, Programs, Debloat, System check, Snapshots, Undo
+menu.ps1            the one-line Windows entry (irm | iex)
 packaging/entry.py  PyInstaller entry (__main__.py's relative import breaks it)
 ```
 
@@ -71,80 +74,36 @@ shrinks it. `overview.py` is read-only by construction.
   filesystem, never follow a symlink. It returns unreadable-directory count as
   a third value, so a root-owned folder shows "needs admin" rather than 0 B.
 - **Listing and measuring are separate.** `folders()` returns rows instantly;
-  `measure()` is the walk. The GUI paints the rows, then fills them one at a
-  time, because `C:\Windows` and `AppData` are hundreds of thousands of files.
+  `measure()` is the walk. The menu shows the rows at once and walks them only
+  on M, because `C:\Windows` and `AppData` are hundreds of thousands of files.
 - `/proc/mounts` is mostly squashfs snaps, tmpfs and overlays;
   `parse_mounts()` keeps real `/dev/*` devices only.
 
-## GUI
+## One entry: menu.ps1 (2026-09-29)
 
-`docs/ux-test-plan.md` holds the personas, scenarios and test cases, with what
-was verified on screen versus traced in code. Re-run it after touching
-`gui.py`; several of these defects produced no exception and no console error,
-so only a screenshot caught them.
+Mon asked for the GUI to go and for `irm .../menu.ps1 | iex` to be the only
+way in. The Flet window (`gui.py`), `run.ps1`, the `[gui]` extra, the GUI
+release asset and the Flet-based Android/iOS builds were deleted; git history
+has them. Everything the window did is in the terminal menu now, and the menu
+decides nothing either: it calls the same core as the CLI.
 
-`gui.py` decides nothing. It calls `junk.run()`, `apps.list_apps()` and
-`snapshot.run()` exactly as the CLI does, so the two front ends cannot disagree
-about what a clean will delete. Keep new behaviour in the core, not in a tab.
-
-- **Two calling modes, because the GUI has no terminal.** `snapshot.run()` and
-  `apps.uninstall()` take `capture`: the CLI leaves stdio attached so a sudo
-  prompt and apt's y/n reach the user, while the GUI captures output, passes
-  `-y` up front, and uses `sudo -n` so an unanswerable password prompt fails
-  instead of hanging the window.
-- **Long work goes through `_worker()`, never `page.run_thread()` directly.**
-  `run_thread` uses a multi-worker `ThreadPoolExecutor` (`flet/app.py`), so two
-  clicks on Refresh really do run in parallel. Two jobs rebuilding one control
-  list corrupted it: reconciling rows by object identity
-  (`controls.index(placeholder)`) raised `ValueError: ... is not in list` and
-  left the row stuck on "measuring…" with nothing shown to the user. Rows are
-  now replaced by index, and `_worker` refuses a second job per panel.
-- **A wrapping `ft.Row` cannot hold an `expand=True` child.** Flutter renders
-  the entire panel as a featureless grey block — no exception, no console
-  error. `_buttons()` wraps fixed-width controls; `_field_row()` is for rows
-  containing a text field.
-- **Nothing destructive is pre-selected.** `junk.Target.opt_in` marks the
-  Recycle Bin / Trash, package-manager caches (a re-download) and shader
-  caches (a stutter), which the GUI never ticks for the user, and
-  "Clean selected" is disabled until a scan returns something.
-- **Layout (2026-09-26 redesign):** a `NavigationRail` and one page at a time
-  in `body.content`. Pages are one scrolling `Column` with
-  `horizontal_alignment=STRETCH` (without it cards shrink to their content);
-  Programs is a `ListView`. Every target carries `group` and `about`; the Clean
-  page renders sections from `GROUPS` in gui.py, so a new group needs an entry
-  there or its targets vanish. Opening Clean runs `preview()` (cheap:
-  `junk.present()` only), a scan fills rows one by one.
-- **A section checkbox is tristate only while mixed.** With `tristate=True`
-  and value `False` (Flet's default, so never sent to Flutter) it rendered the
-  mixed dash on an empty section. Its click is decided from the rows, not from
-  the value Flutter cycles to.
-- **Ticking a row must not rebuild the rows** (`on_tick` → `totals()` only):
-  a rebuild takes keyboard focus off the box that was just toggled.
-- **`_worker` claims the panel before starting the thread.** Set inside the
-  thread, two clicks in quick succession both saw an idle panel.
-- **Driving it from Claude in Chrome (Windows box):** clicks work, mouse-wheel
-  and keyboard scrolling do not reach the Flutter canvas (a 3-line Flet probe
-  failed the same way), and the canvas draws at 80% of the viewport in
-  screenshots — divide screenshot coordinates accordingly. The first load
-  takes ~20 s. `resize_window` has no effect on a maximized window.
-- **A checkbox's label is the target name** (`ListTile(title=checkbox)`), not a
-  separate `title`: a screen reader announcing "checkbox, unchecked" with the
-  name elsewhere tells a blind user nothing about what is about to be deleted.
-- **Flet 1.0 API, which differs from every 0.x tutorial:** `ft.run(main)` (no
-  `ft.app`), `ft.Button` (no `ElevatedButton`), tabs are
-  `ft.Tabs(length=N, content=Column([TabBar(tabs=[...]), TabBarView(controls=[...])]))`,
-  and dialogs/snackbars go through `page.show_dialog()` / `page.pop_dialog()`
-  (`SnackBar` is a `DialogControl` too). Check with `dataclasses.fields()`
-  against the installed version rather than trusting a tutorial.
-- **How to see it from this Linux box:** run it in web mode
-  (`ft.run(main, view=ft.AppView.WEB_BROWSER, port=8951)`) and drive it with
-  the cached Playwright Chromium. Flutter paints to a canvas, so clicks are by
-  coordinate, not selector. Use a **fresh browser context** per run: Flet
-  restores the previous session on reload, dialog included, which silently
-  swallows later clicks.
-- CI only import-checks `gui.py` (`pip install -e '.[gui]'`), which is how a
-  Flet rename would show up. `flet build` for `.apk`/`.ipa`/`.exe` needs the
-  Flutter SDK and has never been run here.
+- **Overview**: disks and the explained folders; nothing is walked until M
+  (Measure) -- `C:\Windows` and AppData are hundreds of thousands of files.
+- **Programs**: a checklist, so several programs go in one pass (the BCU
+  idea). A program whose uninstaller is missing is listed apart and
+  force-removed through `leftovers.force_plan` (the CLI's plan); the others
+  run their own uninstaller, captured (`sudo -n`, `-y`) since a password
+  prompt inside the menu would hang it. High-confidence leftovers of what
+  uninstalled are offered once at the end, into a restorable backup.
+- **Snapshots**: create/list, captured the same way.
+- **Nothing destructive is pre-selected**: `junk.Target.opt_in` (Recycle Bin,
+  package caches, shader caches) is never ticked for the user.
+- `message()` returns a button's action only for a click; a key comes back
+  as itself, so every button there also has a letter (M, C, L).
+- Confirm texts for fixes come from `repair.explain(fix)`.
+- **How to see it from this Linux box:** run `python -m cleam menu` in a pty
+  (`pty.fork`, COLUMNS/LINES set), send keys, strip ANSI from the output and
+  grep the frames.
 
 Development happens on a Linux ARM box. The Windows and macOS code paths
 cannot run there — only CI executes them. Say so when reporting a change to
@@ -153,18 +112,14 @@ them as done.
 `tests/platform_smoke.py` is the end-to-end check that the unit tests cannot
 be: it calls the installed command and the real platform (the real registry,
 the real `/Applications`), with a leftovers round-trip inside a sandboxed
-HOME. `.github/workflows/platform-tests.yml` runs it on all three OSes, builds
-and silently installs/uninstalls the Windows installer, and attempts the
-mobile builds. Run it after touching anything platform-specific — the unit
+HOME. `.github/workflows/platform-tests.yml` runs it on all three OSes, and
+builds and silently installs/uninstalls the Windows installer. Run it after touching anything platform-specific — the unit
 tests mock the platform away, which is why they stay green while a Windows
 path is broken.
 
-Traps that cost a CI round each, all in the harness rather than in Cleam:
-`flet pack` clears `dist/` (give each build its own `--distpath`);
-`flet build apk/ipa` prompts about its Flutter SDK and a prompt in CI is an
-`EOFError` (pass `--yes`); and PowerShell returns a bare string when
-`Where-Object` matches once, so `$found[0]` is the first character — wrap it
-in `@()`.
+A trap that cost a CI round, in the harness rather than in Cleam: PowerShell
+returns a bare string when `Where-Object` matches once, so `$found[0]` is the
+first character — wrap it in `@()`.
 
 ## Safety invariants — do not weaken
 
@@ -248,8 +203,8 @@ accepting them safe.
   which would fill C: with a D: game and could half-delete on a locked file.
 - Still unbuilt from Revo: traced installation (a full registry/filesystem
   snapshot diff). Hunter mode's crosshair overlay needs a transparent always-on-top
-  window with global mouse hooks — not reachable in Flet; the substitute is
-  picking from running processes.
+  window with global mouse hooks — not reachable from a terminal; the
+  substitute is picking from running processes.
 
 ## Platform facts worth not relearning
 
@@ -308,8 +263,8 @@ files. Nothing in it deletes, quarantines or disables anything.
   back on" exists only with a journal entry: without one there is no exact
   state to restore. `StartupItem.protective` (AV/firewall/backup words,
   word-boundary regex so "reset" is not ESET) is never offered. CLI: `cleam
-  startup [--off|--on ID] [--yes]`. The GUI still lists without switches,
-  like its checks.
+  startup [--off|--on ID] [--yes]`; the menu's System check has the same
+  switches.
 - **`program_of()` resolves a bare name on PATH** (`shutil.which`): Windows
   tasks like `BthUdTask.exe` and Run entries like `rundll32.exe x.dll,Entry`
   name no folder, and read as "does not exist" (a false WARN with a Turn off
@@ -535,7 +490,6 @@ checkbox by itself.
 
 ## Open decisions
 
-- Installer format (Inno Setup around the portable build, or `flet build`).
 - Code signing — unsigned PyInstaller binaries get flagged by SmartScreen/AV.
   Costs in `docs/platforms.md`.
 - Command-based targets exist now (`mode="command"`); `journalctl

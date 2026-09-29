@@ -2,9 +2,11 @@
 #
 #   irm https://raw.githubusercontent.com/MONNNNNNNNNNN/cleam/main/menu.ps1 | iex
 #
-# Same as run.ps1, but fetches the command-line build and runs it in this
-# window: an ASCII menu with checkboxes for debloat, junk and the security
-# check. Run it from an elevated PowerShell for machine-wide settings.
+# The one way in: downloads the command-line build of the latest release into
+# %LOCALAPPDATA%\Cleam\portable (checked against GitHub's SHA-256) and runs
+# its menu in this window -- Overview, Clean junk, Programs, Debloat, System
+# check, Snapshots, Undo. Run it from an elevated PowerShell for machine-wide
+# settings.
 & {
     $ErrorActionPreference = 'Stop'
     $ProgressPreference = 'SilentlyContinue'

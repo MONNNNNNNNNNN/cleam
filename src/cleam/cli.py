@@ -169,13 +169,7 @@ def cmd_uninstall(args) -> int:
 def _force_uninstall(app, installed, args) -> int:
     """The uninstaller is gone or broken: move the program's folder, its entry
     and its high-confidence leftovers into one backup that `cleam restore` undoes."""
-    others = [a for a in installed if a is not app]
-    items, why = leftovers.forced(
-        app.name, args.install_dir or app.install_dir, app.key,
-        other_names=tuple(a.name for a in others),
-        other_dirs=tuple(a.install_dir for a in others if a.install_dir),
-        explicit=bool(args.install_dir),
-    )
+    items, why = leftovers.force_plan(app, installed, args.install_dir)
     if why:
         print(f"cleam: {why}", file=sys.stderr)
         return 1

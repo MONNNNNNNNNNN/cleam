@@ -1,6 +1,8 @@
 import unittest
+from pathlib import Path
+from unittest import mock
 
-from cleam import security, tui
+from cleam import apps, leftovers, overview, security, snapshot, tui
 
 
 class FakeTerminal:
@@ -285,3 +287,69 @@ class Clip(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class FakeBackground:
+    def __init__(self, **results):
+        self.results, self.refreshed = results, []
+
+    def get(self, term, name, title, what):
+        return self.results[name]
+
+    def refresh(self, name):
+        self.refreshed.append(name)
+
+
+class NewScreens(unittest.TestCase):
+    """Overview, Programs and Snapshots: what the window had, now in the menu (menu.ps1's only UI)."""
+
+    def test_overview_measures_only_when_asked(self):
+        folder = overview.Folder("Cache", Path("/nowhere"), note="Regenerable.")
+        bg = FakeBackground(overview=("Test OS", [overview.Disk("C:\\", 100, 91, 9)], [folder]))
+        term = FakeTerminal([tui.ESC])
+        tui.overview_screen(term, bg)
+        self.assertFalse(folder.measured)
+        self.assertTrue(any("91% used" in line for line in term.frame))
+        with mock.patch.object(overview, "measure", side_effect=lambda f: setattr(f, "measured", True)) as walk:
+            tui.overview_screen(FakeTerminal(["m", tui.ESC]), bg)
+        walk.assert_called_once_with(folder)
+
+    def test_programs_uninstalls_force_removes_and_offers_leftovers(self):
+        broken = apps.App("B", "Broken", "1", "registry", '"C:\\gone\\unins.exe"', install_dir="C:\\Broken")
+        fine = apps.App("F", "Fine", "2", "registry", '"C:\\Fine\\unins.exe"')
+        bg = FakeBackground(apps=[broken, fine])
+        folder = leftovers.Leftover("folder", "C:\\Broken", "own", "high")
+        remnant = leftovers.Leftover("folder", "C:\\Users\\u\\AppData\\Roaming\\Fine", "left", "high")
+        # Tick both (the cursor starts on Broken), Uninstall, Yes, Yes to the leftovers, OK.
+        keys = [tui.SPACE, tui.DOWN, tui.SPACE, tui.ENTER, "y", "y", tui.ENTER]
+        with mock.patch.object(apps, "uninstaller_missing", side_effect=lambda a: a is broken), \
+                mock.patch.object(leftovers, "force_plan", return_value=([folder], "")), \
+                mock.patch.object(leftovers, "remove", return_value=(Path("/backup"), [])) as move, \
+                mock.patch.object(apps, "uninstall", return_value=(0, "")) as run, \
+                mock.patch.object(leftovers, "scan", return_value=[remnant]):
+            tui.programs_screen(FakeTerminal(keys), bg)
+        run.assert_called_once()
+        self.assertIs(run.call_args.args[0], fine)
+        self.assertEqual(move.call_args_list[0], mock.call([folder], label="Broken", stop_on_error=True))
+        self.assertEqual(move.call_args_list[1], mock.call([remnant], label="Fine"))
+        self.assertEqual(bg.refreshed, ["apps"])
+
+    def test_programs_does_nothing_without_a_yes(self):
+        fine = apps.App("F", "Fine", "2", "registry", "x")
+        with mock.patch.object(apps, "uninstaller_missing", return_value=False), \
+                mock.patch.object(apps, "uninstall") as run:
+            tui.programs_screen(FakeTerminal([tui.SPACE, tui.ENTER, "n"]), FakeBackground(apps=[fine]))
+        run.assert_not_called()
+
+    def test_snapshots_create_without_a_password_prompt(self):
+        with mock.patch.object(snapshot, "create", return_value=(0, "Created restore point")) as make:
+            term = FakeTerminal(["c", tui.ENTER, tui.ESC])
+            tui.snapshot_screen(term, FakeBackground())
+        make.assert_called_once_with("Cleam", capture=True)  # captured: sudo -n, never a prompt inside the menu
+
+    def test_the_main_menu_has_every_page(self):
+        with mock.patch.object(tui, "Background"), mock.patch.object(tui, "menu", return_value=None) as shown:
+            tui.main_menu(FakeTerminal([]))
+        names = [n for _, n, _ in shown.call_args.args[2]]
+        for page in ("Overview", "Clean junk", "Programs", "Debloat", "System check", "Snapshots", "Undo debloat"):
+            self.assertIn(page, names)

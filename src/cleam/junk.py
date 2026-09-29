@@ -52,7 +52,7 @@ class Target:
     # opt_in targets are never selected for the user. The Recycle Bin is the
     # only undo anybody has, so emptying it has to be a deliberate click.
     opt_in: bool = False
-    group: str = "System"  # the section the GUI lists it under
+    group: str = "System"  # the section the menu lists it under
     about: str = ""  # what it is and what deleting it costs, in one plain sentence
     # Only names matching one of these (lower-case fnmatch patterns) are
     # touched: files in files mode, top-level entries in entries mode. Log

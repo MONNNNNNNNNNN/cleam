@@ -1,9 +1,9 @@
 """System restore points (Windows) and snapshots (Linux, macOS).
 
 Two calling modes. The CLI runs the tool with the terminal attached, so a sudo
-prompt and the tool's own output reach the user. The GUI has no terminal, so it
-captures output instead and asks sudo not to prompt -- an unanswerable password
-prompt would hang the window.
+prompt and the tool's own output reach the user. The terminal menu owns the
+screen, so it captures output instead and asks sudo not to prompt -- an
+unanswerable password prompt would hang the menu.
 """
 from __future__ import annotations
 
