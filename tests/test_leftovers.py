@@ -127,6 +127,82 @@ class BackupAndRestore(unittest.TestCase):
         self.assertNotIn("..", backup.name)
 
 
+class Forced(unittest.TestCase):
+    """A forced uninstall takes the program's folder and entry; the guards decide when it may."""
+
+    def setUp(self):
+        self.root = Path(tempfile.mkdtemp())
+        self.app = self.root / "Programs" / "Broken App"
+        (self.app / "bin").mkdir(parents=True)
+        (self.app / "bin" / "app.exe").write_bytes(b"x" * 10)
+        for p in (mock.patch.object(leftovers, "_roots", return_value=[]),
+                  mock.patch.object(leftovers, "_registry_leftovers", return_value=[]),
+                  mock.patch.object(leftovers, "backup_dir", return_value=self.root / "backups")):
+            p.start()
+            self.addCleanup(p.stop)
+
+    def test_the_folder_and_the_entry_are_taken(self):
+        key = "HKCU\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\Broken App"
+        items, why = leftovers.forced("Broken App", str(self.app), key)
+        self.assertEqual(why, "")
+        self.assertEqual([(i.kind, i.target, i.confidence) for i in items],
+                         [("folder", str(self.app), "high"), ("registry", key, "high")])
+        self.assertEqual(items[0].bytes, 10)
+
+    def test_a_folder_not_named_after_the_program_needs_the_user_to_name_it(self):
+        _, why = leftovers.forced("Something Else", str(self.app))
+        self.assertIn("--install-dir", why)
+        items, why = leftovers.forced("Something Else", str(self.app), explicit=True)
+        self.assertEqual((why, items[0].target), ("", str(self.app)))
+
+    def test_unsafe_folders_are_refused(self):
+        for folder in (str(Path.home()), Path(self.root).anchor, "relative\\path", str(self.root / "nope")):
+            items, why = leftovers.forced("Broken App", folder, explicit=True)
+            self.assertEqual(items, [], folder)
+            self.assertTrue(why, folder)
+        self.assertIn("could not tell", leftovers.forced("Broken App", "")[1])
+
+    def test_shared_folders_and_your_own_folders_are_refused_even_when_named(self):
+        shared = self.root / "AppData-Local"
+        shared.mkdir()
+        with mock.patch.object(leftovers, "_roots", return_value=[(shared, "folder")]):
+            self.assertIn("shared", leftovers.forced("AppData Local", str(shared), explicit=True)[1])
+        documents = Path.home() / "cleam-test-documents"
+        documents.mkdir(exist_ok=True)
+        self.addCleanup(documents.rmdir)
+        self.assertIn("your own", leftovers.forced("Documents", str(documents), explicit=True)[1])
+
+    def test_a_folder_holding_another_program_is_refused(self):
+        _, why = leftovers.forced("Broken App", str(self.app), other_dirs=(str(self.app / "bin"),))
+        self.assertIn("another installed program", why)
+        # Living inside another program's folder (a Steam game) is fine.
+        items, why = leftovers.forced("Broken App", str(self.app), other_dirs=(str(self.root / "Programs"),))
+        self.assertEqual(why, "")
+
+    def test_a_locked_folder_stops_before_the_entry_is_deleted(self):
+        items = [leftovers.Leftover("folder", str(self.root / "gone"), "t", "high"),
+                 leftovers.Leftover("registry", "HKCU\\Software\\X", "t", "high")]
+        with mock.patch.object(leftovers.subprocess, "run") as run:
+            _, errors = leftovers.remove(items, stop_on_error=True)
+        self.assertEqual(len(errors), 1)
+        run.assert_not_called()  # reg export / reg delete never ran
+
+    def test_a_folder_on_another_drive_is_backed_up_on_that_drive(self):
+        backup = self.root / "backups" / "x-1"
+        backup.mkdir(parents=True)
+        real = os.stat
+
+        def fake(path, *a, **k):  # the app's tree is "drive 2", everything else "drive 1"
+            st = real(path, *a, **k)
+            dev = 2 if str(path).startswith(str(self.root / "Programs")) else 1
+            return os.stat_result((st.st_mode, st.st_ino, dev) + tuple(st)[3:])
+
+        with mock.patch.object(leftovers.os, "stat", side_effect=fake):
+            where = leftovers.files_backup(str(self.app), backup)
+        self.assertEqual(where, self.root / "Programs" / ".cleam-backups" / "x-1" / "files")
+        self.assertEqual(leftovers.files_backup(str(self.root / "backups"), backup), backup / "files")
+
+
 class PackageConfig(unittest.TestCase):
     @unittest.skipUnless(leftovers.OS == "linux", "dpkg only")
     def test_a_removed_but_not_purged_package_is_offered(self):

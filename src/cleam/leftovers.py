@@ -227,6 +227,56 @@ def scan(name: str, publisher: str = "", install_dir: str = "", other_apps: tupl
     return found
 
 
+def forced(name: str, install_dir: str, reg_key: str = "", other_names: tuple[str, ...] = (),
+           other_dirs: tuple[str, ...] = (), explicit: bool = False) -> tuple[list[Leftover], str]:
+    """What a forced uninstall moves when the program's own uninstaller is gone:
+    its folder, its Installed-apps entry, and the usual leftovers. ([], why)
+    when the folder is not safe to take. `explicit` means the user named the
+    folder; one Cleam worked out must also be named after the program.
+    """
+    from .junk import safe_root
+
+    if not install_dir:
+        return [], "Cleam could not tell where it is installed; name the folder with --install-dir"
+    folder = Path(install_dir)
+    if not folder.is_absolute() or not os.path.isdir(folder):
+        return [], f"{install_dir} is not a folder on this PC"
+    if os.path.normcase(os.path.realpath(folder)) != os.path.normcase(os.path.abspath(folder)):
+        return [], f"{install_dir} is a link to somewhere else; name the real folder with --install-dir"
+    shared = {os.path.normcase(os.path.abspath(p)) for p, _ in _roots()}  # AppData, ProgramData, Start Menu...
+    for extra in ("LOCALAPPDATA", "ProgramFiles", "ProgramFiles(x86)", "CommonProgramFiles", "CommonProgramFiles(x86)"):
+        if os.environ.get(extra):
+            shared |= {os.path.normcase(os.path.abspath(os.path.join(os.environ[extra], sub)))
+                       for sub in ("", "Programs", "Common Files")}
+    here = os.path.normcase(os.path.abspath(folder))
+    if (not safe_root(folder) or here in shared
+            or os.path.normcase(os.path.abspath(folder.parent)) == os.path.normcase(str(Path.home()))):
+        return [], f"{install_dir} is a drive, a system or shared folder, or one of your own, never one program's"
+    if not explicit and not score(last_path_part(install_dir), aliases_for(name)):
+        return [], (f"{install_dir} is not named after {name}; if it really is its folder, "
+                    f"say so with --install-dir \"{install_dir}\"")
+    mine = os.path.normcase(os.path.abspath(folder))
+    for other in other_dirs:
+        theirs = os.path.normcase(os.path.abspath(other.rstrip("\\/"))) if other else ""
+        if theirs and (theirs == mine or theirs.startswith(mine + os.sep)):
+            return [], f"{install_dir} also holds another installed program ({other})"
+    here = os.path.normcase(os.path.abspath(backup_dir()))
+    if here == mine or here.startswith(mine + os.sep):
+        return [], f"{install_dir} holds Cleam's own backups"
+    files, total, _ = size(str(folder))
+    items = [Leftover("folder", str(folder), f"the program's own folder ({files} files)", "high", total)]
+    if reg_key:
+        items.append(Leftover("registry", reg_key, "its entry in Installed apps", "high"))
+    seen = {os.path.normcase(i.target) for i in items}
+    for item in scan(name, install_dir=install_dir, other_apps=other_names):
+        target = os.path.normcase(item.target)
+        inside, parent = target.startswith(mine + os.sep), mine.startswith(target + os.sep)
+        if target not in seen and not inside and not parent:  # a parent folder may hold other things
+            items.append(item)
+            seen.add(target)
+    return items, ""
+
+
 def safe_label(label: str) -> str:
     """A program name turned into one harmless folder name.
 
@@ -249,12 +299,34 @@ def backup_dir() -> Path:
     return base
 
 
-def remove(items: list[Leftover], label: str = "app") -> tuple[Path, list[str]]:
+def files_backup(target: str, backup: Path) -> Path:
+    """Where a moved file or folder goes: `backup/files`, unless the target is
+    on another drive -- then a folder on that drive, so a 40 GB game on D: is
+    renamed in place instead of copied onto C: (and never half-deleted when
+    a copy fails part-way)."""
+    default = backup / "files"
+    try:
+        dev = os.stat(target).st_dev
+        if dev == os.stat(backup).st_dev:
+            return default
+        top = Path(os.path.abspath(target))
+        while top.parent != top and os.stat(top.parent).st_dev == dev:
+            top = top.parent  # the mount point (a drive root on Windows)
+        other = top / ".cleam-backups" / backup.name / "files"
+        other.mkdir(parents=True, exist_ok=True)
+        return other
+    except OSError:
+        return default
+
+
+def remove(items: list[Leftover], label: str = "app", stop_on_error: bool = False) -> tuple[Path, list[str]]:
     """Move every item into a fresh backup folder and record how to undo it.
 
     Nothing is deleted outright. Files and folders are moved, registry keys are
     exported with `reg export` before they are removed, and package configs are
-    purged (apt has no backup, so the manifest says so).
+    purged (apt has no backup, so the manifest says so). stop_on_error stops at
+    the first failure: a forced uninstall must not delete a program's entry
+    when its folder could not be moved.
     """
     stamp = time.strftime("%Y%m%d-%H%M%S")
     backup = backup_dir() / f"{safe_label(label)}-{stamp}"
@@ -263,6 +335,8 @@ def remove(items: list[Leftover], label: str = "app") -> tuple[Path, list[str]]:
     manifest: list[dict] = []
     errors: list[str] = []
     for index, item in enumerate(items):
+        if stop_on_error and errors:
+            break
         try:
             if item.kind == "registry":
                 export = backup / "registry" / f"{index}.reg"
@@ -289,7 +363,7 @@ def remove(items: list[Leftover], label: str = "app") -> tuple[Path, list[str]]:
                 # Computed outside the f-string: a backslash in an f-string
                 # expression is a syntax error before Python 3.12.
                 stem = os.path.basename(item.target.rstrip("\\/")) or "item"
-                destination = backup / "files" / f"{index}-{stem}"
+                destination = files_backup(item.target, backup) / f"{index}-{stem}"
                 shutil.move(item.target, destination)
                 manifest.append({**asdict(item), "backup": str(destination)})
         except (OSError, subprocess.SubprocessError) as e:

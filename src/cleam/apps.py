@@ -2,11 +2,15 @@
 
 Cleam never deletes an app's files itself: it runs the command the platform
 registered (Windows UninstallString, apt, snap, flatpak, Finder's Trash), so
-the uninstaller's own prompts and cleanup still happen.
+the uninstaller's own prompts and cleanup still happen. The one exception is
+`cleam uninstall --force`, for an uninstaller that is gone: that moves the
+program's folder and entry into a restorable backup (leftovers.forced).
 """
 from __future__ import annotations
 
 import itertools
+import ntpath
+import os
 import plistlib
 import re
 import shutil
@@ -24,6 +28,8 @@ class App:
     version: str
     source: str  # registry | apt | snap | flatpak | app
     command: list[str] | str  # str = a raw Windows command line, passed to CreateProcess as-is
+    key: str = ""  # Windows: the full registry path of its Installed-apps entry
+    install_dir: str = ""  # its own folder, when that could be worked out
 
 
 BIN_DIRS = ("/usr/bin/", "/usr/sbin/", "/bin/", "/sbin/", "/usr/games/", "/opt/")
@@ -105,24 +111,66 @@ def msi_uninstall(cmd: str) -> str:
     return re.sub(r"(?i)(msiexec(?:\.exe)?\"?\s+)/I(?=\{)", r"\1/X", cmd.strip())
 
 
-def from_registry(key: str, values: dict) -> App | None:
+def from_registry(key: str, values: dict, where: str = "") -> App | None:
     name, cmd = values.get("DisplayName"), values.get("UninstallString")
     # SystemComponent hides an entry from Programs and Features; ParentKeyName marks an update/patch.
     if not name or not cmd or values.get("SystemComponent") == 1 or values.get("ParentKeyName"):
         return None
-    return App(key, str(name), str(values.get("DisplayVersion", "")), "registry", msi_uninstall(str(cmd)))
+    return App(key, str(name), str(values.get("DisplayVersion", "")), "registry", msi_uninstall(str(cmd)),
+               key=f"{where}\\{key}" if where else "", install_dir=install_dir_of(values))
+
+
+def program_in(command: str) -> str:
+    """The executable at the start of a Windows command line."""
+    command = command.strip()
+    if command.startswith('"'):
+        return command[1:].split('"', 1)[0]
+    found = re.match(r"(?i)(.+?\.exe)(?=\s|,|$)", command)
+    return found.group(1) if found else command.split(" ", 1)[0]
+
+
+# Folders that hold many programs' installers, never one program's own files.
+SHARED_DIRS = ("\\windows\\installer", "\\package cache", "\\windows\\system32", "\\windows\\syswow64")
+
+
+def install_dir_of(values: dict) -> str:
+    """The program's own folder: InstallLocation, else the folder its icon or
+    uninstaller sits in. "" when that folder is a shared one (an MSI's
+    uninstaller lives in Windows\\Installer, not with the program)."""
+    location = os.path.expandvars(str(values.get("InstallLocation") or "").strip().strip('"')).rstrip("\\")
+    if location:
+        return location
+    for value in (values.get("DisplayIcon"), values.get("UninstallString")):
+        text = str(value or "").strip()
+        if not text or "msiexec" in text.lower():
+            continue
+        folder = ntpath.dirname(os.path.expandvars(program_in(re.sub(r",\s*-?\d+$", "", text))))  # icon ",0"
+        if folder and not any(folder.lower().replace("/", "\\").endswith(d) or d + "\\" in folder.lower()
+                              for d in SHARED_DIRS) and folder.lower().rstrip("\\") != "c:\\windows":
+            return folder
+    return ""
+
+
+def uninstaller_missing(app: App) -> bool:
+    """True when an app's registered uninstaller is a file that is not there.
+    An MSI entry (msiexec /X{GUID}) cannot be judged this way."""
+    if app.source != "registry" or not isinstance(app.command, str) or "msiexec" in app.command.lower():
+        return False
+    program = os.path.expandvars(program_in(app.command))  # REG_EXPAND_SZ: %ProgramFiles%\\...
+    return ("\\" in program or "/" in program) and "%" not in program and not os.path.exists(program)
 
 
 def _windows() -> list[App]:
     import winreg
 
     views = [
-        (winreg.HKEY_LOCAL_MACHINE, winreg.KEY_WOW64_64KEY),
-        (winreg.HKEY_LOCAL_MACHINE, winreg.KEY_WOW64_32KEY),  # WOW6432Node: 32-bit installers
-        (winreg.HKEY_CURRENT_USER, 0),
+        (winreg.HKEY_LOCAL_MACHINE, winreg.KEY_WOW64_64KEY, "HKLM\\" + UNINSTALL_KEY),
+        # WOW6432Node: 32-bit installers
+        (winreg.HKEY_LOCAL_MACHINE, winreg.KEY_WOW64_32KEY, "HKLM\\" + UNINSTALL_KEY.replace("SOFTWARE", "SOFTWARE\\WOW6432Node", 1)),
+        (winreg.HKEY_CURRENT_USER, 0, "HKCU\\" + UNINSTALL_KEY),
     ]
     found: dict[str, App] = {}
-    for hive, view in views:
+    for hive, view, where in views:
         access = winreg.KEY_READ | view
         try:
             root = winreg.OpenKey(hive, UNINSTALL_KEY, 0, access)
@@ -145,7 +193,7 @@ def _windows() -> list[App]:
                             values[n] = v
                 except OSError:
                     continue
-                if (app := from_registry(sub, values)) and sub not in found:
+                if (app := from_registry(sub, values, where)) and sub not in found:
                     found[sub] = app
     return list(found.values())
 

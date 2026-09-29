@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import json
 import os
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -247,6 +248,45 @@ def smoke_startup() -> None:
                        capture_output=True, text=True, timeout=120)
 
 
+def smoke_forced_uninstall() -> None:
+    """A program whose uninstaller is gone: --force moves its folder and entry, restore puts both back."""
+    if OS != "windows":
+        return
+    import winreg
+
+    name = "Cleam Smoke Forced"
+    folder = Path(os.environ["LOCALAPPDATA"]) / "Programs" / name
+    folder.mkdir(parents=True, exist_ok=True)
+    (folder / "app.exe").write_bytes(b"MZ")
+    key = r"SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\CleamSmokeForced"
+    with winreg.CreateKeyEx(winreg.HKEY_CURRENT_USER, key) as k:
+        winreg.SetValueEx(k, "DisplayName", 0, winreg.REG_SZ, name)
+        winreg.SetValueEx(k, "InstallLocation", 0, winreg.REG_SZ, str(folder))
+        winreg.SetValueEx(k, "UninstallString", 0, winreg.REG_SZ, f'"{folder}\\gone\\unins000.exe" /SILENT')
+
+    def key_exists() -> bool:
+        try:
+            winreg.CloseKey(winreg.OpenKey(winreg.HKEY_CURRENT_USER, key))
+            return True
+        except OSError:
+            return False
+
+    try:
+        plain = cleam("uninstall", "CleamSmokeForced", "--yes", expect=(1,))
+        check("a missing uninstaller points at --force", "--force" in plain.stderr)
+        done = cleam("uninstall", "CleamSmokeForced", "--force", "--yes")
+        check("--force moved the folder and removed the entry", not folder.exists() and not key_exists())
+        backup = done.stdout.split("Undo with: cleam restore ", 1)[-1].strip()
+        cleam("restore", backup)
+        check("restore put the folder and the entry back", (folder / "app.exe").exists() and key_exists())
+    finally:
+        shutil.rmtree(folder, ignore_errors=True)
+        try:
+            winreg.DeleteKey(winreg.HKEY_CURRENT_USER, key)
+        except OSError:
+            pass
+
+
 if __name__ == "__main__":
     print(f"Cleam platform smoke test on {OS} ({sys.platform}, python {sys.version.split()[0]})\n", flush=True)
     smoke_cli()
@@ -254,6 +294,7 @@ if __name__ == "__main__":
     smoke_leftovers()
     smoke_registry()
     smoke_startup()
+    smoke_forced_uninstall()
     failed = [name for name, ok, _ in results if not ok]
     print(f"\n{len(results) - len(failed)}/{len(results)} checks passed on {OS}")
     if failed:

@@ -124,3 +124,53 @@ class Startup(unittest.TestCase):
         with self.assertRaises(SystemExit):
             self.run_cli("startup", "--off", "task:\\nope")
         self.ran.assert_not_called()
+
+
+class ForcedUninstall(unittest.TestCase):
+    def setUp(self):
+        from cleam import apps, leftovers
+
+        self.root = Path(tempfile.mkdtemp())
+        self.folder = self.root / "Broken App"
+        self.folder.mkdir()
+        (self.folder / "app.exe").write_bytes(b"x")
+        self.app = apps.App("Broken App", "Broken App", "1.0", "registry",
+                            f'"{self.root / "gone" / "unins000.exe"}" /SILENT', install_dir=str(self.folder))
+        for p in (mock.patch.object(apps, "list_apps", return_value=[self.app]),
+                  mock.patch.object(leftovers, "_roots", return_value=[]),
+                  mock.patch.object(leftovers, "_registry_leftovers", return_value=[]),
+                  mock.patch.object(leftovers, "backup_dir", return_value=self.root / "backups")):
+            p.start()
+            self.addCleanup(p.stop)
+
+    def run_cli(self, *argv):
+        out, err = io.StringIO(), io.StringIO()
+        with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
+            code = cli.main(list(argv))
+        return code, out.getvalue(), err.getvalue()
+
+    def test_a_missing_uninstaller_points_at_force_and_runs_nothing(self):
+        from cleam import apps
+
+        with mock.patch.object(apps, "uninstall") as run:
+            code, _, err = self.run_cli("uninstall", "Broken App", "--yes")
+        self.assertEqual(code, 1)
+        self.assertIn("--force", err)
+        run.assert_not_called()
+
+    def test_force_moves_the_folder_to_a_backup_that_restore_undoes(self):
+        code, out, _ = self.run_cli("uninstall", "Broken App", "--force", "--yes")
+        self.assertEqual(code, 0)
+        self.assertFalse(self.folder.exists())
+        backup = out.split("Undo with: cleam restore ", 1)[1].strip()
+        self.assertEqual(self.run_cli("restore", backup)[0], 0)
+        self.assertTrue((self.folder / "app.exe").exists())
+
+    def test_force_on_an_unlisted_program_needs_its_folder(self):
+        code, _, err = self.run_cli("uninstall", "Ghost", "--force", "--yes")
+        self.assertEqual(code, 2)
+        ghost = self.root / "Ghost"
+        ghost.mkdir()
+        code, out, _ = self.run_cli("uninstall", "Ghost", "--force", "--install-dir", str(ghost), "--yes")
+        self.assertEqual(code, 0)
+        self.assertFalse(ghost.exists())
