@@ -787,7 +787,7 @@ def _security_page(page: ft.Page) -> tuple[ft.Control, object]:
         items = security.startup()
         flagged = sum(i.suspicious for i in items)
         startup_col.controls = [
-            _muted(f"{len(items)} programs start with Windows; {flagged} look odd." if items else "Nothing found.")
+            _muted(f"{len(items)} entries start by themselves; {flagged} look odd." if items else "Nothing found.")
         ] + [
             _state_row(
                 security.WARN if i.suspicious else security.OK,

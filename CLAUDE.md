@@ -296,6 +296,10 @@ files. Nothing in it deletes, quarantines or disables anything.
   word-boundary regex so "reset" is not ESET) is never offered. CLI: `cleam
   startup [--off|--on ID] [--yes]`. The GUI still lists without switches,
   like its checks.
+- **`program_of()` resolves a bare name on PATH** (`shutil.which`): Windows
+  tasks like `BthUdTask.exe` and Run entries like `rundll32.exe x.dll,Entry`
+  name no folder, and read as "does not exist" (a false WARN with a Turn off
+  button on Windows' own task) before this.
 - `security._powershell` forces UTF-8 output: the default OEM code page read
   as ANSI raised UnicodeDecodeError on a service name like "für".
 

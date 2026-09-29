@@ -300,6 +300,7 @@ def cmd_startup(args) -> int:
     if fix is None:
         why = ("protective software is never switched off" if item.protective
                else f"it is already {'off' if args.off else 'on'}" if item.enabled != bool(args.off)
+               else "turn it back on in Task Manager > Startup" if args.on and item.kind in ("run", "folder")
                else "only entries Cleam switched off can be put back here" if args.on
                else "a RunOnce entry deletes itself after one run" if item.location.endswith("RunOnce")
                else "Cleam has no switch for this kind of entry yet")

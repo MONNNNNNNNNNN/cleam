@@ -711,21 +711,38 @@ TASK_TRIGGERS = {"LogonTrigger": "at sign-in", "BootTrigger": "at startup", "Ses
 
 
 def program_of(command: str) -> str:
-    """The executable a Run-key command line starts, with %VARS% expanded."""
+    """The executable a command line starts, with %VARS% expanded and a bare
+    name ("BthUdTask.exe", "rundll32.exe") looked up on PATH the way Windows
+    does -- otherwise it reads as a program that does not exist."""
     # %VAR% by hand: os.path.expandvars leaves %VAR% alone off Windows, and
     # these are always Windows command lines.
     command = re.sub(r"%([^%]+)%", lambda m: os.environ.get(m.group(1), m.group(0)), command.strip())
     if command.startswith('"'):
         end = command.find('"', 1)
-        return command[1:end] if end > 0 else command[1:]
+        return _on_path(command[1:end] if end > 0 else command[1:])
     lower = command.lower()
     for ext in (".exe", ".bat", ".cmd", ".com", ".vbs", ".js", ".ps1", ".lnk"):
         at = lower.find(ext + " ")
         if at < 0 and lower.endswith(ext):
             at = len(lower) - len(ext)
         if at >= 0:
-            return command[: at + len(ext)]
-    return command.split(" ", 1)[0]
+            return _on_path(command[: at + len(ext)])
+    return _on_path(command.split(" ", 1)[0])
+
+
+def _on_path(program: str) -> str:
+    if not program or "\\" in program or "/" in program:
+        return program
+    return shutil.which(program) or program
+
+
+MISSING = "the program it starts does not exist"
+
+
+def _odd(item: StartupItem, env: dict[str, str]) -> list[str]:
+    """judge() without "missing": a program absent from the Windows folder is a
+    leftover of Windows' own (MusNotification.exe on Server), with nothing to run."""
+    return [r for r in judge(item, env) if r != MISSING]
 
 
 def judge(item: StartupItem, env: dict[str, str] | None = None) -> list[str]:
@@ -736,7 +753,7 @@ def judge(item: StartupItem, env: dict[str, str] | None = None) -> list[str]:
     low = path.lower().replace("/", "\\")
     cmd = item.command.lower()
     if path and not os.path.exists(path):
-        reasons.append("the program it starts does not exist")
+        reasons.append(MISSING)
     temp = (env.get("TEMP") or "").lower()
     # %TEMP% is often an 8.3 short path (ADMINI~1) while commands use the long one.
     if (temp and low.startswith(temp.rstrip("\\") + "\\")) or "\\appdata\\local\\temp\\" in low:
@@ -859,7 +876,7 @@ def task_items(rows, env: dict[str, str]) -> list[StartupItem]:
         if path.lower().startswith("\\microsoft\\"):
             windows = _under(item.path, env.get("SystemRoot") or env.get("windir") or r"C:\Windows",
                              env.get("ProgramFiles", ""), env.get("ProgramFiles(x86)", ""))
-            if not exe or (windows and not judge(item, env)):
+            if not exe or (windows and not _odd(item, env)):
                 continue
         items.append(item)
     return items
@@ -905,7 +922,7 @@ def hide_microsoft(items: list[StartupItem], env: dict[str, str] | None = None) 
         if i.kind == "service":
             return signed_ms or (not i.signed and _under(i.path, windir))
         return i.kind == "task" and i.key.lower().startswith("\\microsoft\\") and signed_ms
-    return [i for i in items if not windows_own(i) or judge(i, env)]
+    return [i for i in items if not windows_own(i) or _odd(i, env)]
 
 
 def _startup_approved(winreg) -> dict[str, bool]:
