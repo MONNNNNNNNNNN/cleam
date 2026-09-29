@@ -172,6 +172,18 @@ class Forced(unittest.TestCase):
         self.addCleanup(documents.rmdir)
         self.assertIn("your own", leftovers.forced("Documents", str(documents), explicit=True)[1])
 
+    def test_a_link_is_refused_but_a_link_above_it_is_not(self):
+        link = self.root / "Linked App"
+        try:
+            link.symlink_to(self.app, target_is_directory=True)
+        except OSError:
+            self.skipTest("this account cannot create symlinks")
+        self.assertIn("link", leftovers.forced("Linked App", str(link), explicit=True)[1])
+        # macOS: /var -> /private/var sits above every temp folder.
+        above = Path(tempfile.mkdtemp()) / "via"
+        above.symlink_to(self.root, target_is_directory=True)
+        self.assertEqual(leftovers.forced("Broken App", str(above / "Programs" / "Broken App"))[1], "")
+
     def test_a_folder_holding_another_program_is_refused(self):
         _, why = leftovers.forced("Broken App", str(self.app), other_dirs=(str(self.app / "bin"),))
         self.assertIn("another installed program", why)
