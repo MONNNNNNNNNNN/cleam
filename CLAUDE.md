@@ -93,8 +93,20 @@ decides nothing either: it calls the same core as the CLI.
   idea). A program whose uninstaller is missing is listed apart and
   force-removed through `leftovers.force_plan` (the CLI's plan); the others
   run their own uninstaller, captured (`sudo -n`, `-y`) since a password
-  prompt inside the menu would hang it. High-confidence leftovers of what
+  prompt inside the menu would hang it; picking apt/snap without root says
+  "start Cleam with sudo" before and after. High-confidence leftovers of what
   uninstalled are offered once at the end, into a restorable backup.
+- **A Windows uninstaller's exit 0 proves nothing.** NSIS copies itself to
+  `%TEMP%\Au_.exe`, starts the copy and exits while its wizard is open, so
+  the menu scanned "leftovers" of a still-installed program (its own folder
+  and keys, high confidence) and bulk mode opened every wizard at once. Now
+  each registry uninstall waits for Done, re-reads `apps.list_apps()` and
+  only scans when `apps.still_listed()` is false; Skip scans nothing.
+- **What the GUI left on disk:** `cleam-gui-<tag>.exe` (~61 MiB each) and
+  `release.txt` in `%LOCALAPPDATA%\Cleam\portable` (menu.ps1 deletes them on
+  every run), `{app}\cleam-gui.exe` after an installer upgrade
+  (`[InstallDelete]`). A packed Flet build carries its client inside the exe
+  and stored no settings, so nothing else. CI plants all of them and checks.
 - **Snapshots**: create/list, captured the same way.
 - **Nothing destructive is pre-selected**: `junk.Target.opt_in` (Recycle Bin,
   package caches, shader caches) is never ticked for the user.

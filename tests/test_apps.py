@@ -111,6 +111,13 @@ class Parsers(unittest.TestCase):
 
 
 class Uninstall(unittest.TestCase):
+    def test_still_listed_matches_the_exact_registry_entry(self):
+        app = apps.App("{X}", "X", "1", "registry", "u", key="HKLM\\U\\{X}")
+        same_id_other_hive = apps.App("{X}", "X", "1", "registry", "u", key="HKCU\\U\\{X}")
+        self.assertTrue(apps.still_listed(app, [app]))
+        self.assertFalse(apps.still_listed(app, [same_id_other_hive]))
+        self.assertFalse(apps.still_listed(app, []))
+
     APT = apps.App("caddy", "caddy", "2.11", "apt", ["apt-get", "remove", "caddy"])
 
     def _run(self, capture):
